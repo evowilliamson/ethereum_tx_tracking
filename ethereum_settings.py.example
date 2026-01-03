@@ -1,0 +1,21 @@
+"""
+Ethereum Trade Extractor Settings Template
+Copy this file to ethereum_settings.py and fill in your credentials
+"""
+
+import os
+
+# Your Etherscan API Key
+# Get one for free at: https://etherscan.io/apis
+# Set via environment variable: ETHERSCAN_API_KEY
+# Or edit this file directly (but be careful not to commit it!)
+ETHERSCAN_API_KEY = os.getenv("ETHERSCAN_API_KEY", "YOUR_API_KEY_HERE")
+
+# Your Ethereum wallet address
+# Set via environment variable: WALLET_ADDRESS
+# Or edit this file directly (but be careful not to commit it!)
+WALLET_ADDRESS = os.getenv("WALLET_ADDRESS", "0xYourWalletAddressHere")
+
+# Optional: Output file name (default: ethereum_trades.json)
+OUTPUT_FILE = os.getenv("OUTPUT_FILE", "ethereum_trades.json")
+

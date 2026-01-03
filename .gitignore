@@ -20,9 +20,10 @@ ENV/
 *.json
 *.csv
 
-# Environment variables
+# Environment variables and sensitive config
 .env
 *.env
+ethereum_settings.py
 
 # OS
 .DS_Store
