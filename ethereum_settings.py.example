@@ -19,3 +19,6 @@ WALLET_ADDRESS = os.getenv("WALLET_ADDRESS", "0xYourWalletAddressHere")
 # Optional: Output file name (default: ethereum_trades.json)
 OUTPUT_FILE = os.getenv("OUTPUT_FILE", "ethereum_trades.json")
 
+# Blockchain name for CSV export (default: "ethereum")
+BLOCKCHAIN = os.getenv("BLOCKCHAIN", "ethereum")
+
