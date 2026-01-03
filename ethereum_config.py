@@ -162,15 +162,17 @@ SWAP_EVENT_SIGNATURES = {
     "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef": "ERC-20 Transfer",
 }
 
-# Etherscan API Configuration
-# V2 API - Required as of August 2025 (V1 is deprecated)
-# Base URL for V2 API
-ETHERSCAN_API_BASE = "https://api.etherscan.io/v2/api"
-# Chain ID: 1 = Ethereum Mainnet
-ETHEREUM_CHAIN_ID = "1"
-RATE_LIMIT_DELAY = 0.25  # seconds between requests (free tier: 5 calls/sec)
+# Rate limit delay (seconds between requests)
+# Default: 0.25 seconds (free tier: 5 calls/sec)
+# Can be overridden per-chain if needed
+RATE_LIMIT_DELAY = 0.25
 
 # Common token addresses
 ETH_ADDRESS = "0x0000000000000000000000000000000000000000"
-WETH_ADDRESS = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"  # Wrapped ETH
+
+# Legacy defaults for Ethereum (maintained for backward compatibility)
+# New code should use chains_config.get_chain_config() instead
+ETHERSCAN_API_BASE = "https://api.etherscan.io/v2/api"
+ETHEREUM_CHAIN_ID = "1"
+WETH_ADDRESS = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"  # Wrapped ETH on Ethereum
 

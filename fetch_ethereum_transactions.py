@@ -1,5 +1,6 @@
 """
-Fetch all Ethereum transactions for a given address using Etherscan API
+Fetch all EVM transactions for a given address using Etherscan-compatible API
+Works with Ethereum, Base, Arbitrum, Optimism, Polygon, Avalanche, BSC, Linea, Katana, Monad
 Fetches: normal transactions, ERC-20 transfers, and internal transactions
 """
 
@@ -8,22 +9,48 @@ import time
 import json
 import sys
 from typing import List, Dict, Optional
-from ethereum_config import ETHERSCAN_API_BASE, ETHEREUM_CHAIN_ID, RATE_LIMIT_DELAY
+from ethereum_config import RATE_LIMIT_DELAY
+from chains_config import get_chain_config
 
 
 class EthereumTransactionFetcher:
-    """Fetches all transaction data from Etherscan API"""
+    """Fetches all transaction data from Etherscan-compatible API (supports all EVM chains)"""
     
-    def __init__(self, api_key: str, address: str):
-        self.api_key = api_key
+    def __init__(self, api_key: str, address: str, chain_name: str = 'ethereum'):
+        """
+        Initialize transaction fetcher for a specific chain
+        
+        Args:
+            api_key: API key for the explorer (Etherscan, Basescan, etc.)
+                     Can be a dict with chain-specific keys, or a single key (fallback)
+            address: Wallet address to fetch transactions for
+            chain_name: Chain name (e.g., 'ethereum', 'base', 'arbitrum')
+        """
         self.address = address
-        self.base_url = ETHERSCAN_API_BASE
+        self.chain_name = chain_name.lower()
+        
+        # Get chain-specific API key if api_key is a dict, otherwise use provided key
+        if isinstance(api_key, dict):
+            self.api_key = api_key.get(self.chain_name, api_key.get('ethereum', 'YOUR_API_KEY_HERE'))
+        else:
+            self.api_key = api_key
+        
+        # Load chain configuration
+        try:
+            chain_config = get_chain_config(self.chain_name)
+            self.base_url = chain_config['api_base']
+            self.chain_id = chain_config['chain_id']
+        except ValueError as e:
+            print(f"Error: {e}")
+            sys.exit(1)
         
     def _make_request(self, params: Dict) -> Optional[List[Dict]]:
-        """Make a request to Etherscan API V2 with rate limiting"""
+        """Make a request to explorer API V2 with rate limiting"""
         params['apikey'] = self.api_key
         params['address'] = self.address
-        params['chainid'] = ETHEREUM_CHAIN_ID  # Required for V2 API
+        # Only add chainid for V2 API (BSCScan uses V1 API without chainid)
+        if '/v2/api' in self.base_url:
+            params['chainid'] = self.chain_id
         
         try:
             response = requests.get(self.base_url, params=params, timeout=30)
@@ -39,6 +66,11 @@ class EthereumTransactionFetcher:
             message = data.get('message', '')
             status = data.get('status')
             
+            # Check if we got results despite status 0 (some APIs return data with status 0)
+            if isinstance(result, list) and len(result) > 0:
+                # We have data, return it even if status is 0
+                return result
+            
             if status == '0':
                 if 'rate limit' in message.lower():
                     print("Rate limit hit, waiting 5 seconds...")
@@ -52,6 +84,21 @@ class EthereumTransactionFetcher:
                 elif 'Max rate limit reached' in message:
                     print(f"ERROR: Rate limit exceeded. Please wait and try again later.")
                     return None
+                elif 'free api access is not supported' in message.lower() or 'upgrade your api plan' in message.lower():
+                    # BSC requires paid plan - check if result has data anyway (user might have paid plan)
+                    if isinstance(result, list) and len(result) > 0:
+                        return result
+                    # If no results, it's likely the API key doesn't have BSC access
+                    print(f"  Note: BSC requires paid Etherscan API plan. Your key may not have BSC access.")
+                    return []
+                elif 'deprecated' in message.lower() or (self.chain_name == 'binance' and message == 'NOTOK'):
+                    # BSCScan V1 API is deprecated but still works - ignore the warning
+                    # For BSCScan, "NOTOK" might just mean no results (need separate API key)
+                    # Check if we got results despite the deprecation/NOTOK message
+                    if isinstance(result, list) and len(result) > 0:
+                        return result
+                    # If no results, treat as empty (might need separate BSCScan API key)
+                    return []
                 else:
                     # Check if we still got results despite status 0
                     if isinstance(result, list) and len(result) > 0:
@@ -67,6 +114,12 @@ class EthereumTransactionFetcher:
                     return self._make_request(params)
                 if 'deprecated' in result.lower():
                     print(f"  Warning: API returned deprecation message")
+                    return []
+                # For paid plan required messages, the API might still return data
+                # Check if there's actual error content or just a warning
+                if 'free api access is not supported' in result.lower() or 'upgrade your api plan' in result.lower():
+                    # This is just an informational message - return empty, data would be in result list if available
+                    # The actual transactions would be in a list format, not a string
                     return []
                 return []
             

@@ -17,7 +17,8 @@ STABLECOINS = {'USDC', 'USDT', 'DAI', 'BUSD', 'USDP', 'TUSD', 'USDD', 'FRAX', 'L
 # Protocol stablecoin derivatives (approximate $1, but may vary)
 PROTOCOL_STABLECOINS = {
     'aEthUSDC', 'aUSDC', 'reUSDC', 'fUSDC', 'csUSDC', 'hyperUSDC', 'syrupUSDC',
-    'aEthUSDT', 'syrupUSDT', 'stcUSD', 'siUSD', 'cUSD', 'reUSDe', 'iUSD'
+    'aEthUSDT', 'syrupUSDT', 'stcUSD', 'siUSD', 'cUSD', 'reUSDe', 'iUSD',
+    'vbUSDC', 'yvvbUSDC'  # Katana vault bridge USDC tokens
 }
 
 
@@ -34,8 +35,8 @@ class PriceFeedBuilder:
         return symbol.upper() in STABLECOINS
     
     def is_protocol_stablecoin(self, symbol: str) -> bool:
-        """Check if token is a protocol stablecoin derivative"""
-        return symbol in PROTOCOL_STABLECOINS
+        """Check if token is a protocol stablecoin derivative (case-insensitive)"""
+        return symbol.upper() in {s.upper() for s in PROTOCOL_STABLECOINS}
     
     def calculate_price_from_trade(self, trade: Dict) -> Tuple[Optional[float], Optional[float]]:
         """

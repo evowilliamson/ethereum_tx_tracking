@@ -47,9 +47,10 @@ class TokenMetadataFetcher:
             self.cache[token_address] = token_info
             return token_info
         
-        # Skip zero address
-        if token_address == ETH_ADDRESS.lower():
-            return self.cache[ETH_ADDRESS.lower()]
+        # Skip zero address (native token)
+        eth_address = '0x0000000000000000000000000000000000000000'
+        if token_address == eth_address.lower():
+            return self.cache[eth_address.lower()]
         
         try:
             params = {
@@ -58,6 +59,10 @@ class TokenMetadataFetcher:
                 'contractaddress': token_address,
                 'apikey': self.api_key
             }
+            
+            # Add chainid for V2 API if available
+            if hasattr(self, 'chain_id') and self.chain_id:
+                params['chainid'] = self.chain_id
             
             response = requests.get(self.base_url, params=params, timeout=30)
             time.sleep(RATE_LIMIT_DELAY)
@@ -107,8 +112,17 @@ class TokenMetadataFetcher:
             return amount_str
 
 
-def enrich_trades(input_file: str, output_file: str, api_key: str):
-    """Enrich trades with token metadata"""
+def enrich_trades(input_file: str, output_file: str, api_key: str, transaction_data_file: str = None, chain_name: str = 'ethereum'):
+    """Enrich trades with token metadata
+    
+    Args:
+        input_file: Parsed trades JSON file
+        output_file: Output enriched trades JSON file
+        api_key: API key for token metadata (optional, used as fallback)
+        transaction_data_file: Optional path to raw transaction data (wallet_trades_*.json)
+                              If provided, token metadata will be extracted from ERC20 transfers
+        chain_name: Chain name (for chain-specific config)
+    """
     print("Loading trades...")
     with open(input_file, 'r') as f:
         data = json.load(f)
@@ -121,9 +135,35 @@ def enrich_trades(input_file: str, output_file: str, api_key: str):
     print(f"Enriching {len(trades)} trades with token metadata...")
     print("=" * 60)
     
+    # First, try to extract token metadata from transaction data (if available)
+    token_metadata = {}
+    if transaction_data_file:
+        try:
+            print("Extracting token metadata from transaction data...")
+            with open(transaction_data_file, 'r') as f:
+                tx_data = json.load(f)
+            
+            # Extract from ERC20 token transfers (they contain tokenName, tokenSymbol, tokenDecimal)
+            erc20_transfers = tx_data.get('erc20_token_transfers', [])
+            for tx in erc20_transfers:
+                addr = tx.get('contractAddress', '').lower()
+                if addr and addr not in token_metadata:
+                    # Check if token info exists in transfer
+                    if tx.get('tokenName') or tx.get('tokenSymbol'):
+                        token_metadata[addr] = {
+                            'name': tx.get('tokenName', 'Unknown'),
+                            'symbol': tx.get('tokenSymbol', 'UNKNOWN'),
+                            'decimals': int(tx.get('tokenDecimal', 18))
+                        }
+            
+            if token_metadata:
+                print(f"✓ Extracted metadata for {len(token_metadata)} tokens from transaction data")
+        except Exception as e:
+            print(f"  Warning: Could not extract from transaction data: {e}")
+    
     fetcher = TokenMetadataFetcher(api_key)
     
-    # Collect unique token addresses
+    # Collect unique token addresses from trades
     token_addresses = set()
     for trade in trades:
         token_addresses.add(trade.get('token_in', '').lower())
@@ -131,18 +171,21 @@ def enrich_trades(input_file: str, output_file: str, api_key: str):
     
     token_addresses.discard('')  # Remove empty addresses
     print(f"Found {len(token_addresses)} unique tokens")
-    print("Fetching token metadata...")
     
-    # Fetch metadata for all tokens
-    token_metadata = {}
-    for i, token_addr in enumerate(token_addresses, 1):
-        print(f"  [{i}/{len(token_addresses)}] Fetching {token_addr[:10]}...", end=' ', flush=True)
-        metadata = fetcher.fetch_token_info(token_addr)
-        if metadata:
-            token_metadata[token_addr] = metadata
-            print(f"✓ {metadata['symbol']}")
-        else:
-            print("✗ Failed")
+    # Only fetch metadata for tokens we don't already have
+    missing_tokens = [addr for addr in token_addresses if addr not in token_metadata]
+    if missing_tokens:
+        print(f"Fetching metadata for {len(missing_tokens)} remaining tokens...")
+        for i, token_addr in enumerate(missing_tokens, 1):
+            print(f"  [{i}/{len(missing_tokens)}] Fetching {token_addr[:10]}...", end=' ', flush=True)
+            metadata = fetcher.fetch_token_info(token_addr)
+            if metadata:
+                token_metadata[token_addr] = metadata
+                print(f"✓ {metadata['symbol']}")
+            else:
+                print("✗ Failed")
+    else:
+        print("✓ All token metadata found in transaction data")
     
     # Enrich trades
     print("\nEnriching trades...")

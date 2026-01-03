@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-Single script to fetch, parse, enrich, and export all Ethereum DEX trades
+Single script to fetch, parse, enrich, and export DEX trades for any EVM chain
 Reads configuration from ethereum_settings.py and generates a CSV file
+Supports: ethereum, monad, avax, base, arbitrum, binance, linea, katana, polygon, optimism
 """
 
 import sys
@@ -25,12 +26,19 @@ def format_date_for_csv(timestamp):
         return ''
 
 
-def export_to_csv(enriched_json_file: str, output_csv: str, blockchain: str, address: str):
+def export_to_csv(enriched_json_file: str, output_csv: str, blockchain: str, address: str, append_mode: bool = False):
     """
     Export enriched trades to CSV format with USD intermediary step.
     Each swap is split into two transactions:
     1. source_currency -> USD (disposition)
     2. USD -> target_currency (acquisition)
+    
+    Args:
+        enriched_json_file: Path to enriched trades JSON
+        output_csv: Path to output CSV file (always evm_trades.csv)
+        blockchain: Chain name (ethereum, monad, etc.) - used for platform column
+        address: Wallet address
+        append_mode: If True, append to existing file (skip header). If False, create new file.
     """
     print(f"\nExporting trades to CSV: {output_csv}")
     print("-" * 60)
@@ -44,20 +52,22 @@ def export_to_csv(enriched_json_file: str, output_csv: str, blockchain: str, add
         print("No trades to export")
         return
     
-    # Write CSV
-    with open(output_csv, 'w', newline='', encoding='utf-8') as f:
+    # Open file in append mode if appending, write mode if creating new
+    file_mode = 'a' if append_mode else 'w'
+    with open(output_csv, file_mode, newline='', encoding='utf-8') as f:
         writer = csv.writer(f, delimiter='\t')  # Tab-separated
         
-        # Write header - simplified for USD intermediary format
-        writer.writerow([
-            'date_time',
-            'source_currency',
-            'source_amount',
-            'target_currency',
-            'target_amount',
-            'platform',
-            'address'
-        ])
+        # Write header only if creating new file
+        if not append_mode:
+            writer.writerow([
+                'date_time',
+                'source_currency',
+                'source_amount',
+                'target_currency',
+                'target_amount',
+                'platform',
+                'address'
+            ])
         
         total_rows = 0
         trades_with_na = 0
@@ -129,20 +139,33 @@ def export_to_csv(enriched_json_file: str, output_csv: str, blockchain: str, add
         print(f"  ⚠ {trades_with_na} trades have N/A values (missing prices)")
 
 
-def main():
-    """Main function - does everything in one go"""
+def main(chain_name=None, address=None, output_csv=None, append_mode=False):
+    """
+    Main function - does everything in one go
+    
+    Args:
+        chain_name: Optional chain name to override settings (e.g., 'base', 'arbitrum')
+        address: Optional wallet address to override settings
+        output_csv: Optional output CSV file path (default: "evm_trades.csv")
+        append_mode: If True, append to CSV instead of overwriting (default: False)
+    """
     # Load settings from ethereum_settings.py
     try:
         from ethereum_settings import ETHERSCAN_API_KEY, WALLET_ADDRESS, OUTPUT_FILE
         # Try to get BLOCKCHAIN, default to "ethereum" if not set
-        try:
-            from ethereum_settings import BLOCKCHAIN
-            blockchain = BLOCKCHAIN if BLOCKCHAIN else 'ethereum'
-        except ImportError:
-            blockchain = 'ethereum'
+        # Override with chain_name parameter if provided
+        if chain_name:
+            blockchain = chain_name
+        else:
+            try:
+                from ethereum_settings import BLOCKCHAIN
+                blockchain = BLOCKCHAIN if BLOCKCHAIN else 'ethereum'
+            except ImportError:
+                blockchain = 'ethereum'
     except ImportError:
         print("Error: ethereum_settings.py not found!")
         print("Please copy ethereum_settings.py.example to ethereum_settings.py and configure it.")
+        print("Note: Despite the filename, this settings file works for all EVM chains.")
         sys.exit(1)
     except Exception as e:
         print(f"Error loading settings: {e}")
@@ -152,39 +175,65 @@ def main():
     if ETHERSCAN_API_KEY == "YOUR_API_KEY_HERE" or not ETHERSCAN_API_KEY:
         print("Error: ETHERSCAN_API_KEY not set in ethereum_settings.py")
         print("Please edit ethereum_settings.py and set your API key.")
+        print("You may also need chain-specific API keys in the API_KEYS dictionary.")
         sys.exit(1)
     
-    if WALLET_ADDRESS == "0xYourWalletAddressHere" or not WALLET_ADDRESS:
+    # Use provided address or fall back to WALLET_ADDRESS
+    if address is None:
+        address = WALLET_ADDRESS
+    
+    if address == "0xYourWalletAddressHere" or not address:
         print("Error: WALLET_ADDRESS not set in ethereum_settings.py")
         print("Please edit ethereum_settings.py and set your wallet address.")
         sys.exit(1)
     
-    address = WALLET_ADDRESS
-    api_key = ETHERSCAN_API_KEY
+    # Validate blockchain name
+    from chains_config import SUPPORTED_CHAINS, get_chain_config
+    blockchain = blockchain.lower()
+    if blockchain not in SUPPORTED_CHAINS:
+        print(f"Error: Blockchain '{blockchain}' not supported.")
+        print(f"Supported chains: {', '.join(SUPPORTED_CHAINS)}")
+        sys.exit(1)
     
-    # Output file names
-    intermediate_json = "wallet_trades.json"
-    parsed_json = OUTPUT_FILE if OUTPUT_FILE else "ethereum_trades.json"
-    enriched_json = parsed_json.replace('.json', '_enriched.json')
-    output_csv = parsed_json.replace('.json', '.csv')
+    chain_config = get_chain_config(blockchain)
+    
+    # Use provided output_csv or default
+    if output_csv is None:
+        output_csv = "evm_trades.csv"
+    
+    # Get chain-specific API key
+    try:
+        from ethereum_settings import API_KEYS
+        api_key = API_KEYS.get(blockchain, ETHERSCAN_API_KEY)
+    except ImportError:
+        api_key = ETHERSCAN_API_KEY
+    
+    # Output file names (chain-specific JSON files, but single CSV for all chains)
+    # Use address suffix to differentiate between multiple addresses
+    address_suffix = address[-8:]  # Last 8 chars of address for file naming
+    intermediate_json = f"wallet_trades_{blockchain}_{address_suffix}.json"
+    parsed_json = f"{blockchain}_trades_{address_suffix}.json"
+    enriched_json = f"{blockchain}_trades_enriched_{address_suffix}.json"
+    priced_json = f"{blockchain}_trades_enriched_priced_{address_suffix}.json"
+    # output_csv is already set from parameter or default above
     
     print("=" * 60)
-    print("Ethereum DEX Trade Extractor - All-in-One")
+    print(f"{chain_config['name']} DEX Trade Extractor - All-in-One")
     print("=" * 60)
+    print(f"Chain: {chain_config['name']} ({blockchain})")
     print(f"Address: {address}")
-    print(f"Blockchain: {blockchain}")
     print(f"Output CSV: {output_csv}")
     print("=" * 60)
     
     # Step 1: Fetch transactions
-    print("\n[Step 1/4] Fetching transactions from Etherscan...")
+    print(f"\n[Step 1/5] Fetching transactions from {chain_config['name']} explorer...")
     print("-" * 60)
     
     if not address.startswith('0x') or len(address) != 42:
-        print("Error: Invalid Ethereum address format")
+        print("Error: Invalid address format")
         sys.exit(1)
     
-    fetcher = EthereumTransactionFetcher(api_key, address)
+    fetcher = EthereumTransactionFetcher(api_key, address, blockchain)
     data = fetcher.fetch_all_data()
     
     print(f"Saving transaction data to {intermediate_json}...")
@@ -193,7 +242,7 @@ def main():
     print(f"✓ Transaction data saved")
     
     # Step 2: Parse trades
-    print("\n[Step 2/4] Parsing DEX trades...")
+    print("\n[Step 2/5] Parsing DEX trades...")
     print("-" * 60)
     
     parser = EthereumTradeParser(data)
@@ -216,19 +265,35 @@ def main():
     print(f"✓ Parsed {len(trades)} trades")
     
     # Step 3: Enrich with token metadata
-    print("\n[Step 3/5] Enriching trades with token metadata...")
+    print(f"\n[Step 3/5] Enriching trades with token metadata...")
     print("-" * 60)
     
-    enrich_trades(parsed_json, enriched_json, api_key)
+    if len(trades) > 0:
+        enrich_trades(parsed_json, enriched_json, api_key, transaction_data_file=intermediate_json, chain_name=blockchain)
+    else:
+        # No trades to enrich, create empty enriched file
+        print("No trades to enrich, creating empty enriched file...")
+        empty_data = {
+            "address": address,
+            "total_trades": 0,
+            "trades": []
+        }
+        with open(enriched_json, 'w') as f:
+            json.dump(empty_data, f, indent=2)
+        print(f"✓ Created {enriched_json}")
     
-    # Step 4: Calculate USD prices
+    # Step 4: Calculate USD prices (only if we have trades)
     print("\n[Step 4/5] Calculating USD prices...")
-    priced_json = enriched_json.replace('.json', '_priced.json')
-    add_prices_to_trades(enriched_json, priced_json)
+    if len(trades) > 0:
+        add_prices_to_trades(enriched_json, priced_json)
+    else:
+        # No trades, use enriched file directly
+        priced_json = enriched_json
     
     # Step 5: Export to CSV
     print("\n[Step 5/5] Exporting to CSV...")
-    export_to_csv(priced_json, output_csv, blockchain, address)
+    # append_mode is now passed as parameter
+    export_to_csv(priced_json, output_csv, blockchain, address, append_mode=append_mode)
     
     # Final summary
     print("\n" + "=" * 60)
@@ -264,5 +329,9 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # Accept chain name as command-line argument
+    chain_name = None
+    if len(sys.argv) > 1:
+        chain_name = sys.argv[1].lower()
+    main(chain_name=chain_name)
 

@@ -5,11 +5,35 @@ Copy this file to ethereum_settings.py and fill in your credentials
 
 import os
 
-# Your Etherscan API Key
-# Get one for free at: https://etherscan.io/apis
-# Set via environment variable: ETHERSCAN_API_KEY
-# Or edit this file directly (but be careful not to commit it!)
+# API Keys for each blockchain explorer
+# Get API keys for free at:
+# - Ethereum: https://etherscan.io/apis
+# - Base: https://basescan.org/apis
+# - Arbitrum: https://arbiscan.io/apis
+# - Optimism: https://optimistic.etherscan.io/apis
+# - Polygon: https://polygonscan.com/apis
+# - Avalanche: https://snowtrace.io/apis
+# - BSC: https://bscscan.com/apis
+# - Linea: https://lineascan.build/apis
+# - Katana/Ronin: Check roninchain.com
+# - Monad: Check monadscan.com
+
+# Default API key (used for Ethereum and as fallback)
 ETHERSCAN_API_KEY = os.getenv("ETHERSCAN_API_KEY", "YOUR_API_KEY_HERE")
+
+# Chain-specific API keys (optional - will fallback to ETHERSCAN_API_KEY if not set)
+API_KEYS = {
+    'ethereum': os.getenv("ETHEREUM_API_KEY", os.getenv("ETHERSCAN_API_KEY", "YOUR_API_KEY_HERE")),
+    'base': os.getenv("BASE_API_KEY", os.getenv("ETHERSCAN_API_KEY", "YOUR_API_KEY_HERE")),
+    'arbitrum': os.getenv("ARBITRUM_API_KEY", os.getenv("ETHERSCAN_API_KEY", "YOUR_API_KEY_HERE")),
+    'optimism': os.getenv("OPTIMISM_API_KEY", os.getenv("ETHERSCAN_API_KEY", "YOUR_API_KEY_HERE")),
+    'polygon': os.getenv("POLYGON_API_KEY", os.getenv("ETHERSCAN_API_KEY", "YOUR_API_KEY_HERE")),
+    'avax': os.getenv("AVAX_API_KEY", os.getenv("ETHERSCAN_API_KEY", "YOUR_API_KEY_HERE")),
+    'binance': os.getenv("BINANCE_API_KEY", os.getenv("ETHERSCAN_API_KEY", "YOUR_API_KEY_HERE")),
+    'linea': os.getenv("LINEA_API_KEY", os.getenv("ETHERSCAN_API_KEY", "YOUR_API_KEY_HERE")),
+    'katana': os.getenv("KATANA_API_KEY", os.getenv("ETHERSCAN_API_KEY", "YOUR_API_KEY_HERE")),
+    'monad': os.getenv("MONAD_API_KEY", os.getenv("ETHERSCAN_API_KEY", "YOUR_API_KEY_HERE")),
+}
 
 # Your Ethereum wallet address
 # Set via environment variable: WALLET_ADDRESS
@@ -19,6 +43,7 @@ WALLET_ADDRESS = os.getenv("WALLET_ADDRESS", "0xYourWalletAddressHere")
 # Optional: Output file name (default: ethereum_trades.json)
 OUTPUT_FILE = os.getenv("OUTPUT_FILE", "ethereum_trades.json")
 
-# Blockchain name for CSV export (default: "ethereum")
+# Supported blockchains: ethereum, monad, avax, base, arbitrum, binance, linea, katana, polygon, optimism
+# See chains_config.py for full list and configuration
 BLOCKCHAIN = os.getenv("BLOCKCHAIN", "ethereum")
 
