@@ -11,6 +11,7 @@ from typing import Dict, Optional
 from collections import defaultdict
 from ethereum_config import ETHERSCAN_API_BASE, RATE_LIMIT_DELAY, ETH_ADDRESS, WETH_ADDRESS
 from known_tokens import KNOWN_TOKENS
+from chains_config import is_evm_chain
 
 
 class TokenMetadataFetcher:
@@ -112,6 +113,176 @@ class TokenMetadataFetcher:
             return amount_str
 
 
+def get_token_metadata_fetcher(chain_name: str, api_key: str):
+    """
+    Get appropriate token metadata fetcher for the chain
+    
+    Args:
+        chain_name: Chain name
+        api_key: API key or RPC endpoint
+    
+    Returns:
+        TokenMetadataFetcher instance
+    """
+    if is_evm_chain(chain_name):
+        return TokenMetadataFetcher(api_key)
+    elif chain_name == 'solana':
+        return SolanaTokenMetadataFetcher(api_key)
+    elif chain_name == 'sui':
+        return SuiTokenMetadataFetcher(api_key)
+    else:
+        # Default to EVM fetcher
+        return TokenMetadataFetcher(api_key)
+
+
+class SolanaTokenMetadataFetcher:
+    """Fetches token metadata from Solana RPC"""
+    
+    def __init__(self, rpc_endpoint: str):
+        self.rpc_endpoint = rpc_endpoint
+        self.cache = {}
+        
+        # Common tokens cache
+        sol_mint = 'So11111111111111111111111111111111111111112'  # Wrapped SOL
+        self.cache[sol_mint.lower()] = {
+            'name': 'Solana',
+            'symbol': 'SOL',
+            'decimals': 9
+        }
+    
+    def fetch_token_info(self, mint_address: str) -> Optional[Dict]:
+        """Fetch token metadata from Solana RPC"""
+        mint_address_lower = mint_address.lower()
+        
+        # Check cache
+        if mint_address_lower in self.cache:
+            return self.cache[mint_address_lower]
+        
+        # For Solana, we can query the mint account for decimals
+        # Name and symbol typically come from token lists or metadata
+        try:
+            import requests
+            payload = {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "getAccountInfo",
+                "params": [
+                    mint_address,  # Use original case for RPC call
+                    {
+                        "encoding": "jsonParsed"
+                    }
+                ]
+            }
+            
+            response = requests.post(self.rpc_endpoint, json=payload, timeout=10)
+            time.sleep(0.25)
+            
+            if response.status_code == 200:
+                data = response.json()
+                if 'result' in data and data['result']:
+                    account_data = data['result'].get('value', {})
+                    parsed = account_data.get('data', {}).get('parsed', {})
+                    info = parsed.get('info', {})
+                    
+                    decimals = info.get('decimals', 9)
+                    
+                    token_info = {
+                        'name': f"Token {mint_address[:8]}",
+                        'symbol': f"TOKEN{mint_address[:4].upper()}",
+                        'decimals': decimals
+                    }
+                    
+                    self.cache[mint_address_lower] = token_info
+                    return token_info
+        except Exception as e:
+            pass
+        
+        # Return default
+        default = {
+            'name': 'Unknown Token',
+            'symbol': 'UNKNOWN',
+            'decimals': 9  # Solana default
+        }
+        self.cache[mint_address_lower] = default
+        return default
+    
+    def format_amount(self, amount_str: str, decimals: int) -> str:
+        """Format token amount from lamports to human-readable"""
+        try:
+            amount = int(amount_str)
+            divisor = 10 ** decimals
+            formatted = amount / divisor
+            return f"{formatted:.{min(decimals, 8)}f}".rstrip('0').rstrip('.')
+        except:
+            return amount_str
+
+
+class SuiTokenMetadataFetcher:
+    """Fetches token metadata from Sui RPC"""
+    
+    def __init__(self, rpc_endpoint: str):
+        self.rpc_endpoint = rpc_endpoint
+        self.cache = {}
+        
+        # Common tokens cache
+        sui_coin_type = '0x2::sui::SUI'
+        self.cache[sui_coin_type.lower()] = {
+            'name': 'Sui',
+            'symbol': 'SUI',
+            'decimals': 9
+        }
+    
+    def fetch_token_info(self, coin_type: str) -> Optional[Dict]:
+        """Fetch token metadata from Sui RPC"""
+        coin_type = coin_type.lower()
+        
+        # Check cache
+        if coin_type in self.cache:
+            return self.cache[coin_type]
+        
+        # For Sui, coin types are in format: 0x...::TOKEN::TOKEN
+        # We can extract symbol from the coin type
+        try:
+            if '::' in coin_type:
+                parts = coin_type.split('::')
+                if len(parts) >= 3:
+                    symbol = parts[-1].rstrip('>').upper()
+                    name = f"{symbol} Token"
+                    
+                    # Default decimals for Sui coins
+                    decimals = 9
+                    
+                    token_info = {
+                        'name': name,
+                        'symbol': symbol,
+                        'decimals': decimals
+                    }
+                    
+                    self.cache[coin_type] = token_info
+                    return token_info
+        except Exception as e:
+            pass
+        
+        # Return default
+        default = {
+            'name': 'Unknown Token',
+            'symbol': 'UNKNOWN',
+            'decimals': 9  # Sui default
+        }
+        self.cache[coin_type] = default
+        return default
+    
+    def format_amount(self, amount_str: str, decimals: int) -> str:
+        """Format token amount to human-readable"""
+        try:
+            amount = int(amount_str)
+            divisor = 10 ** decimals
+            formatted = amount / divisor
+            return f"{formatted:.{min(decimals, 8)}f}".rstrip('0').rstrip('.')
+        except:
+            return amount_str
+
+
 def enrich_trades(input_file: str, output_file: str, api_key: str, transaction_data_file: str = None, chain_name: str = 'ethereum'):
     """Enrich trades with token metadata
     
@@ -161,7 +332,7 @@ def enrich_trades(input_file: str, output_file: str, api_key: str, transaction_d
         except Exception as e:
             print(f"  Warning: Could not extract from transaction data: {e}")
     
-    fetcher = TokenMetadataFetcher(api_key)
+    fetcher = get_token_metadata_fetcher(chain_name, api_key)
     
     # Collect unique token addresses from trades
     token_addresses = set()

@@ -4,7 +4,9 @@ Defines API endpoints, chain IDs, and chain-specific settings
 """
 
 # Supported blockchains
-SUPPORTED_CHAINS = ['ethereum', 'monad', 'arbitrum', 'linea', 'optimism', 'polygon', 'katana', 'binance', 'base']
+# EVM chains: ethereum, monad, arbitrum, linea, optimism, polygon, katana, binance, base, avax
+# Non-EVM chains: solana, sui
+SUPPORTED_CHAINS = ['ethereum', 'monad', 'arbitrum', 'linea', 'optimism', 'polygon', 'katana', 'binance', 'base', 'solana', 'sui']
 # SUPPORTED_CHAINS = ['ethereum', 'monad', 'avax', 'base', 'arbitrum', 'binance', 'linea', 'katana', 'polygon', 'optimism']
 
 # Chain configurations
@@ -89,6 +91,26 @@ CHAINS = {
         'weth_address': '0xc99a6A985eD2Cac1ef41640596C5A5f9F4E19Ef5',  # Verify: WETH/WKAT address on Katana
         'explorer_url': 'https://katana.roninchain.com',
     },
+    'solana': {
+        'name': 'Solana',
+        'api_base': None,  # Solana uses RPC endpoints, not explorer APIs
+        'rpc_endpoint': 'https://api.mainnet-beta.solana.com',  # Default public RPC
+        'chain_id': None,  # Solana doesn't use chain IDs
+        'native_token': 'SOL',
+        'weth_address': None,  # Solana uses wrapped SOL (WSOL) but different address format
+        'explorer_url': 'https://solscan.io',
+        'chain_type': 'non-evm',  # Mark as non-EVM
+    },
+    'sui': {
+        'name': 'Sui',
+        'api_base': None,  # Sui uses RPC endpoints
+        'rpc_endpoint': 'https://fullnode.mainnet.sui.io:443',  # Default public RPC
+        'chain_id': None,  # Sui doesn't use chain IDs
+        'native_token': 'SUI',
+        'weth_address': None,  # Sui uses wrapped SUI but different format
+        'explorer_url': 'https://suiscan.xyz',
+        'chain_type': 'non-evm',  # Mark as non-EVM
+    },
 }
 
 
@@ -97,7 +119,7 @@ def get_chain_config(chain_name: str) -> dict:
     Get configuration for a specific chain
     
     Args:
-        chain_name: Lowercase chain name (e.g., 'ethereum', 'base')
+        chain_name: Lowercase chain name (e.g., 'ethereum', 'base', 'solana', 'sui')
     
     Returns:
         Dictionary with chain configuration
@@ -112,6 +134,21 @@ def get_chain_config(chain_name: str) -> dict:
             f"Supported chains: {', '.join(SUPPORTED_CHAINS)}"
         )
     return CHAINS[chain_name]
+
+
+def is_evm_chain(chain_name: str) -> bool:
+    """
+    Check if a chain is EVM-compatible
+    
+    Args:
+        chain_name: Lowercase chain name
+    
+    Returns:
+        True if EVM-compatible, False otherwise
+    """
+    chain_name = chain_name.lower()
+    chain_config = get_chain_config(chain_name)
+    return chain_config.get('chain_type', 'evm') == 'evm'
 
 
 def get_api_base(chain_name: str) -> str:

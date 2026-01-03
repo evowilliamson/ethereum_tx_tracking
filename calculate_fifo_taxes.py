@@ -154,7 +154,7 @@ class FIFOTaxCalculator:
                     }
                     tax_records.append(tax_record)
                     
-                    # Store trade info
+                    # Store trade info with full details for CSV export
                     self.all_trades.append({
                         'trade_id': trade_id,
                         'type': 'SELL',
@@ -162,6 +162,9 @@ class FIFOTaxCalculator:
                         'amount': amount_sold,
                         'usd_value': sale_proceeds,
                         'date': trade_date,
+                        'date_time': date_time,
+                        'platform': platform,
+                        'address': address,
                     })
                 
                 elif source_currency == 'USD':
@@ -173,7 +176,7 @@ class FIFOTaxCalculator:
                     # Add to inventory
                     self.add_lot(token_bought, amount_bought, cost_basis, trade_id, trade_date)
                     
-                    # Store trade info
+                    # Store trade info with full details for CSV export
                     self.all_trades.append({
                         'trade_id': trade_id,
                         'type': 'BUY',
@@ -181,33 +184,76 @@ class FIFOTaxCalculator:
                         'amount': amount_bought,
                         'usd_value': cost_basis,
                         'date': trade_date,
+                        'date_time': date_time,
+                        'platform': platform,
+                        'address': address,
                     })
         
         return tax_records
     
     def export_tax_csv(self, tax_records, output_file):
-        """Export tax records to CSV"""
-        if not tax_records:
+        """Export tax records to CSV, including both BUY and SELL transactions"""
+        if not tax_records and not self.all_trades:
             print("No tax records to export")
             return
         
         fieldnames = [
-            'trade_id', 'date_time', 'token_sold', 'amount_sold',
+            'trade_id', 'date_time', 'type', 'token', 'amount',
+            'usd_value', 'token_sold', 'amount_sold',
             'sale_proceeds_usd', 'cost_basis_usd', 'profit_usd',
             'buy_tx_ids', 'platform', 'address'
         ]
+        
+        # Create a mapping of trade_id to tax_record for SELL transactions
+        tax_records_by_id = {int(r['trade_id']): r for r in tax_records}
+        
+        # Prepare all records (both BUY and SELL)
+        all_records = []
+        
+        for trade in self.all_trades:
+            trade_id = trade['trade_id']
+            record = {
+                'trade_id': trade_id,
+                'date_time': trade['date_time'],
+                'type': trade['type'],
+                'token': trade['token'],
+                'amount': str(trade['amount'].quantize(Decimal('0.00000001'), rounding=ROUND_DOWN)),
+                'usd_value': str(trade['usd_value'].quantize(Decimal('0.01'), rounding=ROUND_DOWN)),
+                'token_sold': '',
+                'amount_sold': '',
+                'sale_proceeds_usd': '',
+                'cost_basis_usd': '',
+                'profit_usd': '',
+                'buy_tx_ids': '',
+                'platform': trade['platform'],
+                'address': trade['address'],
+            }
+            
+            # If this is a SELL transaction, add tax record details
+            if trade['type'] == 'SELL' and trade_id in tax_records_by_id:
+                tax_record = tax_records_by_id[trade_id]
+                record['token_sold'] = tax_record['token_sold']
+                record['amount_sold'] = tax_record['amount_sold']
+                record['sale_proceeds_usd'] = tax_record['sale_proceeds_usd']
+                record['cost_basis_usd'] = tax_record['cost_basis_usd']
+                record['profit_usd'] = tax_record['profit_usd']
+                record['buy_tx_ids'] = tax_record['buy_tx_ids']
+            
+            all_records.append(record)
         
         with open(output_file, 'w', newline='', encoding='utf-8') as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter='\t')
             writer.writeheader()
             
             # Sort by date (most recent first)
-            sorted_records = sorted(tax_records, key=lambda x: x['date_time'], reverse=True)
+            sorted_records = sorted(all_records, key=lambda x: x['date_time'], reverse=True)
             writer.writerows(sorted_records)
         
-        print(f"✓ Exported {len(tax_records)} tax records to {output_file}")
+        buy_count = sum(1 for r in all_records if r['type'] == 'BUY')
+        sell_count = sum(1 for r in all_records if r['type'] == 'SELL')
+        print(f"✓ Exported {len(all_records)} records ({buy_count} BUY, {sell_count} SELL) to {output_file}")
         
-        # Print summary
+        # Print summary (only from tax_records, not all_records)
         total_profit = sum(Decimal(r['profit_usd']) for r in tax_records)
         total_sales = sum(Decimal(r['sale_proceeds_usd']) for r in tax_records)
         total_cost = sum(Decimal(r['cost_basis_usd']) for r in tax_records)

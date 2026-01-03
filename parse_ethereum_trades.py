@@ -11,6 +11,7 @@ from ethereum_config import (
     DEX_ROUTERS, SWAP_FUNCTION_SIGNATURES, SWAP_EVENT_SIGNATURES,
     ETH_ADDRESS, WETH_ADDRESS
 )
+from blockchain_interface import BlockchainTradeParser
 
 # Protocol token patterns that indicate deposits/withdrawals, not DEX swaps
 PROTOCOL_TOKEN_PATTERNS = [
@@ -27,7 +28,7 @@ PROTOCOL_TOKEN_PATTERNS = [
 ]
 
 
-class EthereumTradeParser:
+class EthereumTradeParser(BlockchainTradeParser):
     """Parses transactions to identify DEX trades"""
     
     def __init__(self, transaction_data: Dict):

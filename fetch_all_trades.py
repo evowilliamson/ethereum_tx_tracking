@@ -11,10 +11,10 @@ import json
 import csv
 import time
 from datetime import datetime
-from fetch_ethereum_transactions import EthereumTransactionFetcher
-from parse_ethereum_trades import EthereumTradeParser
+from blockchain_interface import get_fetcher_class, get_parser_class
 from enrich_trades_with_tokens import enrich_trades
 from calculate_prices import add_prices_to_trades
+from chains_config import is_evm_chain
 
 
 def format_date_for_csv(timestamp):
@@ -201,16 +201,28 @@ def main(chain_name=None, address=None, output_csv=None, append_mode=False):
     if output_csv is None:
         output_csv = "evm_trades.csv"
     
-    # Get chain-specific API key
+    # Get chain-specific API key/RPC endpoint
     try:
         from ethereum_settings import API_KEYS
-        api_key = API_KEYS.get(blockchain, ETHERSCAN_API_KEY)
+        # For EVM chains, use API keys
+        if is_evm_chain(blockchain):
+            api_key = API_KEYS.get(blockchain, ETHERSCAN_API_KEY) if 'API_KEYS' in dir() else ETHERSCAN_API_KEY
+        else:
+            # For Solana/Sui, try to get RPC endpoint from settings, otherwise use default
+            try:
+                from ethereum_settings import RPC_ENDPOINTS
+                api_key = RPC_ENDPOINTS.get(blockchain, chain_config.get('rpc_endpoint', ''))
+            except (ImportError, AttributeError):
+                api_key = chain_config.get('rpc_endpoint', '')
     except ImportError:
-        api_key = ETHERSCAN_API_KEY
+        if is_evm_chain(blockchain):
+            api_key = ETHERSCAN_API_KEY
+        else:
+            api_key = chain_config.get('rpc_endpoint', '')
     
     # Output file names (chain-specific JSON files, but single CSV for all chains)
     # Use address suffix to differentiate between multiple addresses
-    address_suffix = address[-8:]  # Last 8 chars of address for file naming
+    address_suffix = address[-8:] if len(address) >= 8 else address  # Last 8 chars of address for file naming
     intermediate_json = f"wallet_trades_{blockchain}_{address_suffix}.json"
     parsed_json = f"{blockchain}_trades_{address_suffix}.json"
     enriched_json = f"{blockchain}_trades_enriched_{address_suffix}.json"
@@ -229,11 +241,14 @@ def main(chain_name=None, address=None, output_csv=None, append_mode=False):
     print(f"\n[Step 1/5] Fetching transactions from {chain_config['name']} explorer...")
     print("-" * 60)
     
-    if not address.startswith('0x') or len(address) != 42:
-        print("Error: Invalid address format")
-        sys.exit(1)
+    # Get appropriate fetcher class
+    FetcherClass = get_fetcher_class(blockchain)
+    fetcher = FetcherClass(api_key, address, blockchain)
     
-    fetcher = EthereumTransactionFetcher(api_key, address, blockchain)
+    # Validate address format
+    if not fetcher.validate_address(address):
+        print(f"Error: Invalid {blockchain} address format")
+        sys.exit(1)
     data = fetcher.fetch_all_data()
     
     print(f"Saving transaction data to {intermediate_json}...")
@@ -245,7 +260,9 @@ def main(chain_name=None, address=None, output_csv=None, append_mode=False):
     print("\n[Step 2/5] Parsing DEX trades...")
     print("-" * 60)
     
-    parser = EthereumTradeParser(data)
+    # Get appropriate parser class
+    ParserClass = get_parser_class(blockchain)
+    parser = ParserClass(data)
     trades = parser.parse_all_trades()
     
     output = {

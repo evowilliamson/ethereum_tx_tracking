@@ -43,7 +43,19 @@ WALLET_ADDRESS = os.getenv("WALLET_ADDRESS", "0xYourWalletAddressHere")
 # Optional: Output file name (default: ethereum_trades.json)
 OUTPUT_FILE = os.getenv("OUTPUT_FILE", "ethereum_trades.json")
 
-# Supported blockchains: ethereum, monad, avax, base, arbitrum, binance, linea, katana, polygon, optimism
+# RPC Endpoints for non-EVM chains (Solana, Sui)
+# Optional - will use default public RPCs if not set
+# For better performance, consider using premium RPC services:
+# - Solana: https://www.quicknode.com/chains/sol, https://www.alchemy.com/solana
+# - Sui: https://www.quicknode.com/chains/sui, https://www.alchemy.com/sui
+RPC_ENDPOINTS = {
+    'solana': os.getenv("SOLANA_RPC_ENDPOINT", "https://api.mainnet-beta.solana.com"),
+    'sui': os.getenv("SUI_RPC_ENDPOINT", "https://fullnode.mainnet.sui.io:443"),
+}
+
+# Supported blockchains: 
+# EVM chains: ethereum, monad, avax, base, arbitrum, binance, linea, katana, polygon, optimism
+# Non-EVM chains: solana, sui
 # See chains_config.py for full list and configuration
 BLOCKCHAIN = os.getenv("BLOCKCHAIN", "ethereum")
 

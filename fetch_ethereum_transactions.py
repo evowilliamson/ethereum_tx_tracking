@@ -11,9 +11,10 @@ import sys
 from typing import List, Dict, Optional
 from ethereum_config import RATE_LIMIT_DELAY
 from chains_config import get_chain_config
+from blockchain_interface import BlockchainTransactionFetcher
 
 
-class EthereumTransactionFetcher:
+class EthereumTransactionFetcher(BlockchainTransactionFetcher):
     """Fetches all transaction data from Etherscan-compatible API (supports all EVM chains)"""
     
     def __init__(self, api_key: str, address: str, chain_name: str = 'ethereum'):
@@ -43,6 +44,10 @@ class EthereumTransactionFetcher:
         except ValueError as e:
             print(f"Error: {e}")
             sys.exit(1)
+    
+    def validate_address(self, address: str) -> bool:
+        """Validate EVM address format (0x prefix, 42 chars)"""
+        return address.startswith('0x') and len(address) == 42
         
     def _make_request(self, params: Dict) -> Optional[List[Dict]]:
         """Make a request to explorer API V2 with rate limiting"""
