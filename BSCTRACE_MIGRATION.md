@@ -13,7 +13,7 @@ As of December 2025, BSCScan API was deprecated and moved behind a paywall on Et
 2. **`fetch_ethereum_transactions.py`**: Updated to handle BSCTrace API format
    - No `chainid` parameter for BSCTrace (similar to old BSCScan V1)
 
-3. **`blockchain_settings.py.example`**: Updated with BSCTrace API key instructions
+3. **`ethereum_settings.py.example`**: Updated with BSCTrace API key instructions
    - Environment variable: `BSCTRACE_API_KEY` or `BINANCE_API_KEY`
 
 4. **Documentation**: Updated README.md with BSCTrace setup instructions
@@ -29,7 +29,7 @@ As of December 2025, BSCScan API was deprecated and moved behind a paywall on Et
    ```bash
    export BSCTRACE_API_KEY="your_api_key_here"
    ```
-   Or add to `blockchain_settings.py`:
+   Or add to `ethereum_settings.py`:
    ```python
    API_KEYS = {
        'binance': 'your_bsctrace_api_key_here',

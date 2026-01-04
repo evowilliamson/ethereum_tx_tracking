@@ -64,3 +64,4 @@ NON_EVM_ADDRESSES = {
     'solana': os.getenv("SOLANA_ADDRESS", ""),  # Solana address format
     'sui': os.getenv("SUI_ADDRESS", "0x6525b9a3a48a54e518cf57618c68621074be2ffd724f8a51e7b3048682acf572"),  # Sui address (66 chars)
 }
+

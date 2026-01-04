@@ -56,6 +56,7 @@ def parse_koinly_trades(json_file):
     print("Extracting exchange trades...\n")
     
     trades = []
+    binance_tx_hashes = set()  # Collect Binance transaction hashes
     
     for i, tx in enumerate(transactions):
         if (i + 1) % 1000 == 0:
@@ -63,6 +64,24 @@ def parse_koinly_trades(json_file):
         
         if not isinstance(tx, dict):
             continue
+        
+        # Check if this is a Binance transaction
+        wallet_from = tx.get('from', {}).get('wallet', {}) if tx.get('from') else {}
+        wallet_to = tx.get('to', {}).get('wallet', {}) if tx.get('to') else {}
+        
+        wallet_service_from = wallet_from.get('wallet_service', {}) if wallet_from else {}
+        wallet_service_to = wallet_to.get('wallet_service', {}) if wallet_to else {}
+        
+        service_name = (wallet_service_from.get('name', '') or wallet_service_to.get('name', '')).upper()
+        service_tag = (wallet_service_from.get('tag', '') or wallet_service_to.get('tag', '')).upper()
+        
+        is_binance = 'BINANCE' in service_name or 'BSC' in service_name or 'binance' in service_tag or 'bsc' in service_tag
+        
+        # Collect Binance transaction hashes
+        if is_binance:
+            tx_hash = tx.get('txhash', '') or tx.get('tx_hash', '') or tx.get('hash', '')
+            if tx_hash and tx_hash.startswith('0x'):
+                binance_tx_hashes.add(tx_hash)
             
         # Only process exchange transactions
         if tx.get('type') != 'exchange':
@@ -96,7 +115,16 @@ def parse_koinly_trades(json_file):
         
         trades.append(trade)
     
-    print(f"\n✓ Processing complete: Found {len(trades)} exchange trades\n")
+    print(f"\n✓ Processing complete: Found {len(trades)} exchange trades")
+    print(f"✓ Found {len(binance_tx_hashes)} unique Binance transaction hashes\n")
+    
+    # Save Binance transaction hashes to a file
+    if binance_tx_hashes:
+        with open('binance_tx_hashes.txt', 'w') as f:
+            for tx_hash in sorted(binance_tx_hashes):
+                f.write(f"{tx_hash}\n")
+        print(f"✓ Saved Binance transaction hashes to binance_tx_hashes.txt")
+    
     return trades
 
 def parse_koinly_trades_streaming(json_file):

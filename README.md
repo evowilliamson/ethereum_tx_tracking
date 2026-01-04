@@ -46,7 +46,9 @@ The tool automatically detects trades from all major DEXes via pattern matching:
 ### Prerequisites
 
 - Python 3.7 or higher
-- An Etherscan API key (free tier works) - get one at [https://etherscan.io/apis](https://etherscan.io/apis)
+- API keys:
+  - **Ethereum & most chains**: Etherscan API key (free tier works) - get one at [https://etherscan.io/apis](https://etherscan.io/apis)
+  - **BSC (Binance Smart Chain)**: BSCTrace API key (free) - get one at [https://nodereal.io/meganode](https://nodereal.io/meganode)
 
 ### Step 1: Clone or Download
 
@@ -70,10 +72,10 @@ pip install python-dotenv  # For .env file support
 
 1. Copy the example settings file:
    ```bash
-   cp blockchain_settings.py.example blockchain_settings.py
+   cp ethereum_settings.py.example ethereum_settings.py
    ```
 
-2. Edit `blockchain_settings.py` and add:
+2. Edit `ethereum_settings.py` and add:
    - Your Etherscan API key
    - Your wallet address(es)
    - Optional: Chain-specific API keys
@@ -89,7 +91,7 @@ pip install python-dotenv  # For .env file support
    ]
    ```
 
-**Important**: `blockchain_settings.py` is gitignored to protect your API keys and addresses. Never commit this file!
+**Important**: `ethereum_settings.py` is gitignored to protect your API keys and addresses. Never commit this file!
 
 ### Step 4: (Optional) Environment Variables
 
@@ -277,7 +279,7 @@ Some chains may work better with their native explorer API keys:
 - Polygon: [https://polygonscan.com/apis](https://polygonscan.com/apis)
 - Optimism: [https://optimistic.etherscan.io/apis](https://optimistic.etherscan.io/apis)
 
-Add chain-specific keys in `blockchain_settings.py`:
+Add chain-specific keys in `ethereum_settings.py`:
 
 ```python
 API_KEYS = {
@@ -308,7 +310,8 @@ For large wallets or many chains, the script may take several minutes to complet
 
 - **Verify API key**: Check your Etherscan API key is valid
 - **Check rate limits**: Wait a few minutes if rate limited
-- **Optimism/BSC**: May require chain-specific API keys or paid Etherscan plan
+- **Optimism**: May require chain-specific API keys or paid Etherscan plan
+- **BSC (Binance Smart Chain)**: Uses BSCTrace API (free) - get API key at [https://nodereal.io/meganode](https://nodereal.io/meganode). Note: BSCScan API was deprecated in Dec 2025.
 
 ### Missing USD prices
 
@@ -367,7 +370,7 @@ SUPPORTED_CHAINS = ['ethereum', 'arbitrum']  # Only these chains
 
 ### Processing Single Address
 
-Edit `blockchain_settings.py`:
+Edit `ethereum_settings.py`:
 
 ```python
 WALLET_ADDRESSES = ["0xYourAddress"]
@@ -390,14 +393,14 @@ Currently processes all historical transactions. To limit date range, modify `fe
 ├── calculate_prices.py                # USD price calculation
 ├── chains_config.py                   # Chain configurations
 ├── ethereum_config.py                 # DEX router addresses
-├── blockchain_settings.py.example       # Settings template
-├── blockchain_settings.py               # Your settings (gitignored)
+├── ethereum_settings.py.example       # Settings template
+├── ethereum_settings.py               # Your settings (gitignored)
 └── known_tokens.py                    # Known token metadata database
 ```
 
 ## Privacy & Security
 
-- **API Keys**: Never commit `blockchain_settings.py` (it's in `.gitignore`)
+- **API Keys**: Never commit `ethereum_settings.py` (it's in `.gitignore`)
 - **Wallet Addresses**: Wallet addresses are public on-chain, but be careful with API keys
 - **Transaction Data**: All data is fetched from public blockchain explorers
 
@@ -441,6 +444,5 @@ For issues:
 - Ethereum-only support
 - Single address processing
 - Basic CSV export
-
 
 

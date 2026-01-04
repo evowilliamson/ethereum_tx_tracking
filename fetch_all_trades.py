@@ -250,7 +250,7 @@ def main(chain_name=None, address=None, output_csv=None, append_mode=False):
     
     chain_config = get_chain_config(blockchain)
     
-    # Use provided output_csv or default
+    # Use provided output_csv or default based on chain type
     if output_csv is None:
         if is_evm_chain(blockchain):
             output_csv = "evm_trades.csv"
