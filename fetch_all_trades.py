@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Single script to fetch, parse, enrich, and export DEX trades for any EVM chain
-Reads configuration from blockchain_settings.py and generates a CSV file
+Reads configuration from ethereum_settings.py and generates a CSV file
 Supports: ethereum, monad, avax, base, arbitrum, binance, linea, katana, polygon, optimism
 """
 
@@ -195,7 +195,7 @@ def main(chain_name=None, address=None, output_csv=None, append_mode=False):
     """
     # Load settings from blockchain_settings.py
     try:
-        from blockchain_settings import ETHERSCAN_API_KEY, WALLET_ADDRESS, OUTPUT_FILE
+        from blockchain_settings import ETHERSCAN_API_KEY, WALLET_ADDRESS, OUTPUT_FILE, NON_EVM_ADDRESSES
         # Try to get BLOCKCHAIN, default to "ethereum" if not set
         # Override with chain_name parameter if provided
         if chain_name:
@@ -209,7 +209,7 @@ def main(chain_name=None, address=None, output_csv=None, append_mode=False):
     except ImportError:
         print("Error: blockchain_settings.py not found!")
         print("Please copy blockchain_settings.py.example to blockchain_settings.py and configure it.")
-        print("Note: Despite the filename, this settings file works for all EVM chains.")
+        print("Note: This settings file works for all EVM and non-EVM chains.")
         sys.exit(1)
     except Exception as e:
         print(f"Error loading settings: {e}")
@@ -222,13 +222,22 @@ def main(chain_name=None, address=None, output_csv=None, append_mode=False):
         print("You may also need chain-specific API keys in the API_KEYS dictionary.")
         sys.exit(1)
     
-    # Use provided address or fall back to WALLET_ADDRESS
+    # Use provided address or fall back to appropriate address based on chain type
     if address is None:
-        address = WALLET_ADDRESS
+        from chains_config import is_evm_chain
+        if is_evm_chain(blockchain):
+            address = WALLET_ADDRESS
+        else:
+            # For non-EVM chains, get address from NON_EVM_ADDRESSES
+            address = NON_EVM_ADDRESSES.get(blockchain, '')
     
-    if address == "0xYourWalletAddressHere" or not address:
-        print("Error: WALLET_ADDRESS not set in blockchain_settings.py")
-        print("Please edit blockchain_settings.py and set your wallet address.")
+    if not address or (address == "0xYourWalletAddressHere" and is_evm_chain(blockchain)):
+        chain_type = "EVM" if is_evm_chain(blockchain) else "non-EVM"
+        print(f"Error: Address not set for {blockchain} ({chain_type} chain)")
+        if is_evm_chain(blockchain):
+            print("Please edit blockchain_settings.py and set WALLET_ADDRESS or WALLET_ADDRESSES.")
+        else:
+            print(f"Please edit blockchain_settings.py and set NON_EVM_ADDRESSES['{blockchain}'].")
         sys.exit(1)
     
     # Validate blockchain name
@@ -252,12 +261,8 @@ def main(chain_name=None, address=None, output_csv=None, append_mode=False):
         if is_evm_chain(blockchain):
             api_key = API_KEYS.get(blockchain, ETHERSCAN_API_KEY) if 'API_KEYS' in dir() else ETHERSCAN_API_KEY
         else:
-            # For Solana/Sui, try to get RPC endpoint from settings, otherwise use default
-            try:
-                from blockchain_settings import RPC_ENDPOINTS
-                api_key = RPC_ENDPOINTS.get(blockchain, chain_config.get('rpc_endpoint', ''))
-            except (ImportError, AttributeError):
-                api_key = chain_config.get('rpc_endpoint', '')
+            # For Solana/Sui, use RPC endpoint from chain config (no API key needed for public RPCs)
+            api_key = chain_config.get('rpc_endpoint', '')
     except ImportError:
         if is_evm_chain(blockchain):
             api_key = ETHERSCAN_API_KEY
