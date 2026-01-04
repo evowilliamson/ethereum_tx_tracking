@@ -1,6 +1,7 @@
 """
-Ethereum Trade Extractor Settings Template
-Copy this file to ethereum_settings.py and fill in your credentials
+Multi-Blockchain Trade Extractor Settings Template
+Copy this file to blockchain_settings.py and fill in your credentials
+Supports EVM chains (Ethereum, Base, Arbitrum, etc.) and non-EVM chains (Solana, Sui)
 """
 
 import os

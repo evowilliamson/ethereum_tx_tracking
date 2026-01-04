@@ -193,23 +193,23 @@ def main(chain_name=None, address=None, output_csv=None, append_mode=False):
         output_csv: Optional output CSV file path (default: "evm_trades.csv")
         append_mode: If True, append to CSV instead of overwriting (default: False)
     """
-    # Load settings from ethereum_settings.py
+    # Load settings from blockchain_settings.py
     try:
-        from ethereum_settings import ETHERSCAN_API_KEY, WALLET_ADDRESS, OUTPUT_FILE
+        from blockchain_settings import ETHERSCAN_API_KEY, WALLET_ADDRESS, OUTPUT_FILE, NON_EVM_ADDRESSES
         # Try to get BLOCKCHAIN, default to "ethereum" if not set
         # Override with chain_name parameter if provided
         if chain_name:
             blockchain = chain_name
         else:
             try:
-                from ethereum_settings import BLOCKCHAIN
+                from blockchain_settings import BLOCKCHAIN
                 blockchain = BLOCKCHAIN if BLOCKCHAIN else 'ethereum'
             except ImportError:
                 blockchain = 'ethereum'
     except ImportError:
-        print("Error: ethereum_settings.py not found!")
-        print("Please copy ethereum_settings.py.example to ethereum_settings.py and configure it.")
-        print("Note: Despite the filename, this settings file works for all EVM chains.")
+        print("Error: blockchain_settings.py not found!")
+        print("Please copy blockchain_settings.py.example to blockchain_settings.py and configure it.")
+        print("Note: This settings file works for all EVM and non-EVM chains.")
         sys.exit(1)
     except Exception as e:
         print(f"Error loading settings: {e}")
@@ -217,18 +217,27 @@ def main(chain_name=None, address=None, output_csv=None, append_mode=False):
     
     # Check if settings are configured
     if ETHERSCAN_API_KEY == "YOUR_API_KEY_HERE" or not ETHERSCAN_API_KEY:
-        print("Error: ETHERSCAN_API_KEY not set in ethereum_settings.py")
-        print("Please edit ethereum_settings.py and set your API key.")
+        print("Error: ETHERSCAN_API_KEY not set in blockchain_settings.py")
+        print("Please edit blockchain_settings.py and set your API key.")
         print("You may also need chain-specific API keys in the API_KEYS dictionary.")
         sys.exit(1)
     
-    # Use provided address or fall back to WALLET_ADDRESS
+    # Use provided address or fall back to appropriate address based on chain type
     if address is None:
-        address = WALLET_ADDRESS
+        from chains_config import is_evm_chain
+        if is_evm_chain(blockchain):
+            address = WALLET_ADDRESS
+        else:
+            # For non-EVM chains, get address from NON_EVM_ADDRESSES
+            address = NON_EVM_ADDRESSES.get(blockchain, '')
     
-    if address == "0xYourWalletAddressHere" or not address:
-        print("Error: WALLET_ADDRESS not set in ethereum_settings.py")
-        print("Please edit ethereum_settings.py and set your wallet address.")
+    if not address or (address == "0xYourWalletAddressHere" and is_evm_chain(blockchain)):
+        chain_type = "EVM" if is_evm_chain(blockchain) else "non-EVM"
+        print(f"Error: Address not set for {blockchain} ({chain_type} chain)")
+        if is_evm_chain(blockchain):
+            print("Please edit blockchain_settings.py and set WALLET_ADDRESS or WALLET_ADDRESSES.")
+        else:
+            print(f"Please edit blockchain_settings.py and set NON_EVM_ADDRESSES['{blockchain}'].")
         sys.exit(1)
     
     # Validate blockchain name
@@ -247,17 +256,13 @@ def main(chain_name=None, address=None, output_csv=None, append_mode=False):
     
     # Get chain-specific API key/RPC endpoint
     try:
-        from ethereum_settings import API_KEYS
+        from blockchain_settings import API_KEYS
         # For EVM chains, use API keys
         if is_evm_chain(blockchain):
             api_key = API_KEYS.get(blockchain, ETHERSCAN_API_KEY) if 'API_KEYS' in dir() else ETHERSCAN_API_KEY
         else:
-            # For Solana/Sui, try to get RPC endpoint from settings, otherwise use default
-            try:
-                from ethereum_settings import RPC_ENDPOINTS
-                api_key = RPC_ENDPOINTS.get(blockchain, chain_config.get('rpc_endpoint', ''))
-            except (ImportError, AttributeError):
-                api_key = chain_config.get('rpc_endpoint', '')
+            # For Solana/Sui, use RPC endpoint from chain config (no API key needed for public RPCs)
+            api_key = chain_config.get('rpc_endpoint', '')
     except ImportError:
         if is_evm_chain(blockchain):
             api_key = ETHERSCAN_API_KEY

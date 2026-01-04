@@ -17,7 +17,7 @@ def main():
     output_file = "ethereum_trades.json"
     
     try:
-        from ethereum_settings import ETHERSCAN_API_KEY, WALLET_ADDRESS, OUTPUT_FILE as CONFIG_OUTPUT
+        from blockchain_settings import ETHERSCAN_API_KEY, WALLET_ADDRESS, OUTPUT_FILE as CONFIG_OUTPUT
         if ETHERSCAN_API_KEY != "YOUR_API_KEY_HERE" and WALLET_ADDRESS != "0xYourWalletAddressHere":
             api_key = ETHERSCAN_API_KEY
             address = WALLET_ADDRESS
@@ -39,8 +39,8 @@ def main():
         print("Ethereum DEX Trade Extractor")
         print("=" * 60)
         print("\nYou can provide credentials in two ways:")
-        print("\nOption 1: Edit ethereum_settings.py")
-        print("  - Open ethereum_settings.py")
+        print("\nOption 1: Edit blockchain_settings.py")
+        print("  - Open blockchain_settings.py")
         print("  - Replace YOUR_API_KEY_HERE with your Etherscan API key")
         print("  - Replace 0xYourWalletAddressHere with your wallet address")
         print("  - Then run: python get_ethereum_trades.py")
