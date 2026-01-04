@@ -7,99 +7,210 @@ Uses multiple strategies to ensure tax services have USD valuations
 import json
 import requests
 import time
+import os
 from typing import Dict, List, Optional, Tuple
-from datetime import datetime, timedelta
+from datetime import datetime
 from collections import defaultdict
 
-# Stablecoins that should be priced at $1
-STABLECOINS = {'USDC', 'USDT', 'DAI', 'BUSD', 'USDP', 'TUSD', 'USDD', 'FRAX', 'LUSD', 'USD3', 'NUSD', 'AUSD', 'USN'}
-
-# Protocol stablecoin derivatives (approximate $1, but may vary)
-PROTOCOL_STABLECOINS = {
-    'aEthUSDC', 'aUSDC', 'reUSDC', 'fUSDC', 'csUSDC', 'hyperUSDC', 'syrupUSDC',
-    'aEthUSDT', 'syrupUSDT', 'stcUSD', 'siUSD', 'cUSD', 'reUSDe', 'iUSD',
-    'vbUSDC', 'yvvbUSDC'  # Katana vault bridge USDC tokens
+# Stablecoins - extended list for cache window optimization and fallback pricing
+# We get actual prices from CoinGecko, but use this list to:
+# 1. Apply longer cache window (5 min vs 1 min) for stablecoins
+# 2. Fallback to $1.00 if CoinGecko fails for a stablecoin
+STABLECOINS = {
+    # Major USD stablecoins
+    'USDC', 'USDT', 'DAI', 'BUSD', 'USDP', 'TUSD', 'USDD', 'FRAX', 'LUSD', 
+    'GUSD', 'HUSD', 'SUSD', 'MIM', 'OUSD', 'FEI', 'USD3', 'NUSD', 'AUSD', 'USN',
+    # Additional USD stablecoins
+    'USDE',      # Ethena USDe
+    'PYUSD',     # PayPal USD
+    'CRVUSD',    # Curve USD
+    'DOLA',      # Inverse Finance DOLA
+    'USDX',      # dForce USDx
+    'USX',       # Tokenized USD
+    'USDR',      # Real USD
+    'CUSD',      # Celo Dollar
+    'CEUR',      # Celo Euro
+    'EURS',      # STASIS Euro
+    'EURT',      # Tether Euro
+    'AGEUR',     # Angle Protocol agEUR
+    'IDRT',      # Rupiah Token
+    'BIDR',      # Binance IDR
+    'TRYB',      # BiLira
+    'XAUT',      # Tether Gold
+    'PAXG',      # PAX Gold
+    # Algorithmic stablecoins
+    'UST',       # TerraUSD (historical)
+    'KUSD',      # Kolibri USD
+    # Regional stablecoins
+    'BRLT',      # Tether Brazilian Real
+    'CNHT',      # Tether Chinese Yuan Offshore
+    'XAUD',      # Australian Dollar Token
+    'XCAD',      # Canadian Dollar Token
+    'XCHF',      # Swiss Franc Token
+    'XCNY',      # Chinese Yuan Token
+    'XEUR',      # Euro Token
+    'XGBP',      # British Pound Token
+    'XJPY',      # Japanese Yen Token
+    'XKRW',      # South Korean Won Token
+    'XPLN',      # Polish Zloty Token
+    'XSEK',      # Swedish Krona Token
+    'XSGD',      # Singapore Dollar Token
 }
 
 
 class PriceFeedBuilder:
     """Builds a price feed from trades and external APIs"""
     
+    CACHE_FILE = 'coingecko_cache.json'
+    MAPPING_FILE = 'coingecko_symbol_mapping.json'
+    
     def __init__(self):
-        self.price_feed = {}  # token_address -> list of (timestamp, price) tuples
-        self.symbol_to_addresses = {}  # symbol -> set of addresses (for lookup)
-        self.coingecko_cache = {}  # symbol -> CoinGecko ID mapping
+        self.symbol_mapping = self._refresh_symbol_mapping()  # {symbol: coin_id} - refreshed on every flow start
+        self.price_cache = self._load_price_cache()  # {symbol: {'price': float, 'timestamp': int}}
         
     def is_stablecoin(self, symbol: str) -> bool:
         """Check if token is a stablecoin"""
         return symbol.upper() in STABLECOINS
     
-    def is_protocol_stablecoin(self, symbol: str) -> bool:
-        """Check if token is a protocol stablecoin derivative (case-insensitive)"""
-        return symbol.upper() in {s.upper() for s in PROTOCOL_STABLECOINS}
+    def _load_price_cache(self) -> Dict:
+        """Load price cache from file"""
+        if os.path.exists(self.CACHE_FILE):
+            try:
+                with open(self.CACHE_FILE, 'r') as f:
+                    return json.load(f)
+            except Exception:
+                return {}
+        return {}
     
-    def calculate_price_from_trade(self, trade: Dict) -> Tuple[Optional[float], Optional[float]]:
+    def _save_price_cache(self):
+        """Save price cache to file"""
+        try:
+            with open(self.CACHE_FILE, 'w') as f:
+                json.dump(self.price_cache, f, indent=2)
+        except Exception:
+            pass  # Silently fail if can't save cache
+    
+    def _get_cache_key(self, symbol: str, timestamp: int) -> str:
+        """Generate cache key for historical price: symbol_date"""
+        date_str = datetime.fromtimestamp(timestamp).strftime('%Y-%m-%d')
+        return f"{symbol.upper()}_{date_str}"
+    
+    def _refresh_symbol_mapping(self) -> Dict[str, str]:
         """
-        Calculate USD prices from trade if one side is a stablecoin
-        Returns: (source_price_usd, target_price_usd)
+        Refresh symbol → CoinGecko ID mapping on every flow start
+        Queries top 200 for canonical IDs, then /coins/list for all tokens
+        Returns: {symbol: coin_id} mapping
         """
-        token_in_meta = trade.get('token_in_metadata', {})
-        token_out_meta = trade.get('token_out_metadata', {})
+        print("Refreshing CoinGecko symbol mapping...")
         
-        source_symbol = token_in_meta.get('symbol', '').upper()
-        target_symbol = token_out_meta.get('symbol', '').upper()
+        # Step 1: Get canonical IDs from top 200 (for conflict resolution)
+        canonical_ids = {}
+        try:
+            url = "https://api.coingecko.com/api/v3/coins/markets"
+            params = {'vs_currency': 'usd', 'per_page': 200, 'order': 'market_cap_desc', 'page': 1}
+            time.sleep(0.5)
+            response = requests.get(url, params=params, timeout=30)
+            
+            if response.status_code == 200:
+                top200 = response.json()
+                for coin in top200:
+                    symbol = coin.get('symbol', '').upper()
+                    coin_id = coin.get('id', '')
+                    # First entry with this symbol = canonical (highest market cap)
+                    if symbol and symbol not in canonical_ids:
+                        canonical_ids[symbol] = coin_id
+                print(f"  ✓ Got {len(canonical_ids)} canonical IDs from top 200")
+        except Exception as e:
+            print(f"  ⚠ Error getting top 200: {e}")
         
-        source_amount = float(trade.get('amount_in_formatted', '0'))
-        target_amount = float(trade.get('amount_out_formatted', '0'))
+        # Step 2: Get all coins from /coins/list
+        symbol_mapping = {}
+        try:
+            url = "https://api.coingecko.com/api/v3/coins/list"
+            time.sleep(0.5)
+            response = requests.get(url, timeout=60)
+            
+            if response.status_code == 200:
+                all_coins = response.json()
+                print(f"  ✓ Got {len(all_coins)} coins from /coins/list")
+                
+                # Step 3: Build mapping (use canonical when available, otherwise first or heuristic)
+                for coin in all_coins:
+                    symbol = coin.get('symbol', '').upper()
+                    coin_id = coin.get('id', '')
+                    
+                    if symbol and coin_id:
+                        if symbol in canonical_ids:
+                            # Use canonical ID (from top 200, highest market cap)
+                            symbol_mapping[symbol] = canonical_ids[symbol]
+                        elif symbol not in symbol_mapping:
+                            # First time seeing this symbol
+                            symbol_mapping[symbol] = coin_id
+                        else:
+                            # Conflict - use heuristic: prefer non-bridged, shorter ID
+                            current_id = symbol_mapping[symbol]
+                            if ('bridged' not in coin_id.lower() and 'peg' not in coin_id.lower() and 
+                                len(coin_id) < len(current_id)):
+                                symbol_mapping[symbol] = coin_id
+                
+                print(f"  ✓ Built mapping with {len(symbol_mapping)} unique symbols")
+                
+                # Save to file
+                try:
+                    with open(self.MAPPING_FILE, 'w') as f:
+                        json.dump(symbol_mapping, f, indent=2)
+                    print(f"  ✓ Saved to {self.MAPPING_FILE}")
+                except Exception as e:
+                    print(f"  ⚠ Could not save mapping file: {e}")
+                
+            else:
+                print(f"  ⚠ Error getting /coins/list: {response.status_code}")
+                # Try to load from file if exists
+                symbol_mapping = self._load_symbol_mapping()
+        except Exception as e:
+            print(f"  ⚠ Error refreshing mapping: {e}")
+            # Try to load from file if exists
+            symbol_mapping = self._load_symbol_mapping()
         
-        if source_amount == 0 or target_amount == 0:
-            return None, None
-        
-        source_price = None
-        target_price = None
-        
-        # If source is stablecoin
-        if self.is_stablecoin(source_symbol):
-            source_price = 1.0
-            target_price = source_amount / target_amount if target_amount > 0 else None
-        
-        # If target is stablecoin
-        elif self.is_stablecoin(target_symbol):
-            target_price = 1.0
-            source_price = target_amount / source_amount if source_amount > 0 else None
-        
-        # If source is protocol stablecoin (approximate $1)
-        elif self.is_protocol_stablecoin(source_symbol):
-            source_price = 1.0  # Approximate
-            target_price = source_amount / target_amount if target_amount > 0 else None
-        
-        # If target is protocol stablecoin
-        elif self.is_protocol_stablecoin(target_symbol):
-            target_price = 1.0  # Approximate
-            source_price = target_amount / source_amount if source_amount > 0 else None
-        
-        return source_price, target_price
+        return symbol_mapping
+    
+    def _load_symbol_mapping(self) -> Dict[str, str]:
+        """Load symbol mapping from file if refresh fails"""
+        if os.path.exists(self.MAPPING_FILE):
+            try:
+                with open(self.MAPPING_FILE, 'r') as f:
+                    mapping = json.load(f)
+                    print(f"  ✓ Loaded {len(mapping)} mappings from file")
+                    return mapping
+            except Exception:
+                pass
+        return {}
     
     def get_coingecko_price(self, symbol: str, timestamp: int) -> Optional[float]:
-        """Get historical price from CoinGecko (free API, no key needed)"""
-        # Map common symbols to CoinGecko IDs
-        symbol_to_id = {
-            'ETH': 'ethereum',
-            'WETH': 'ethereum',  # WETH price = ETH price
-            'WBTC': 'wrapped-bitcoin',
-            'BTC': 'wrapped-bitcoin',
-            'COMP': 'compound-governance-token',
-            'AAVE': 'aave',
-            'UNI': 'uniswap',
-            'LINK': 'chainlink',
-            'CRV': 'curve-dao-token',
-            'SUSHI': 'sushi',
-            'MKR': 'maker',
-            'SNX': 'synthetix-network-token',
-            'YFI': 'yearn-finance',
-        }
+        """Get historical price from CoinGecko with file-based caching by date"""
+        symbol_upper = symbol.upper()
+        cache_key = self._get_cache_key(symbol_upper, timestamp)
         
-        coingecko_id = symbol_to_id.get(symbol.upper())
+        # Check cache first - same date = same price (no time window needed)
+        if cache_key in self.price_cache:
+            cached_price = self.price_cache[cache_key]
+            if cached_price is not None:
+                return float(cached_price)
+        
+        # Cache miss, query CoinGecko
+        price = self._query_coingecko(symbol_upper, timestamp)
+        
+        # Update cache if we got a price (cache by date, not timestamp)
+        if price is not None:
+            self.price_cache[cache_key] = price
+            self._save_price_cache()
+        
+        return price
+    
+    def _query_coingecko(self, symbol: str, timestamp: int) -> Optional[float]:
+        """Query CoinGecko API for historical price"""
+        # Get coin ID from symbol mapping (refreshed on every flow start)
+        coingecko_id = self.symbol_mapping.get(symbol.upper())
         if not coingecko_id:
             return None
         
@@ -116,8 +227,15 @@ class PriceFeedBuilder:
                 data = response.json()
                 if 'market_data' in data and 'current_price' in data['market_data']:
                     return float(data['market_data']['current_price']['usd'])
+            elif response.status_code == 429:
+                # Rate limited - can't use cache from different date (would be wrong price)
+                print(f"  ⚠ Rate limited for {symbol} on {date_str} - will retry or mark unavailable")
+                # Don't use cached price from different date - better to mark as unavailable
+                # than use wrong price
+            else:
+                print(f"  ⚠ CoinGecko API error for {symbol}: {response.status_code}")
         except Exception as e:
-            pass  # API failed, return None
+            print(f"  ⚠ Exception querying CoinGecko for {symbol}: {e}")
         
         return None
     
@@ -148,136 +266,18 @@ class PriceFeedBuilder:
         
         return None
     
-    def find_price_in_feed(self, token_address: Optional[str], token_symbol: str, 
-                          target_timestamp: int, max_hours: int = 720) -> Optional[float]:
-        """
-        Find price from price feed, looking for prices within max_hours of target timestamp
-        Can search by address or symbol
-        Default max_hours is 720 (30 days) to use prices from earlier trades
-        If no price within window, uses closest available price (for protocol tokens)
-        """
-        # Try by address first
-        if token_address and token_address in self.price_feed:
-            prices = self.price_feed[token_address]
-            if prices:
-                best_price = None
-                min_diff = float('inf')
-                best_price_within_window = None
-                min_diff_within_window = float('inf')
-                
-                for price_timestamp, price in prices:
-                    time_diff = abs(price_timestamp - target_timestamp)
-                    hours_diff = time_diff / 3600
-                    
-                    # Track best price within window
-                    if hours_diff <= max_hours and time_diff < min_diff_within_window:
-                        min_diff_within_window = time_diff
-                        best_price_within_window = price
-                    
-                    # Also track closest price overall (for protocol tokens that rarely trade)
-                    if time_diff < min_diff:
-                        min_diff = time_diff
-                        best_price = price
-                
-                # Prefer price within window, but fall back to closest if available
-                # For protocol tokens, use closest price even if older (better than nothing)
-                if best_price_within_window:
-                    return best_price_within_window
-                elif best_price:
-                    # Use closest price even if outside window (for rare tokens)
-                    return best_price
-        
-        # Try by symbol if address not found
-        if token_symbol:
-            symbol_upper = token_symbol.upper()
-            if symbol_upper in self.symbol_to_addresses:
-                best_price = None
-                min_diff = float('inf')
-                best_price_within_window = None
-                min_diff_within_window = float('inf')
-                
-                for addr in self.symbol_to_addresses[symbol_upper]:
-                    if addr in self.price_feed:
-                        prices = self.price_feed[addr]
-                        for price_timestamp, price in prices:
-                            time_diff = abs(price_timestamp - target_timestamp)
-                            hours_diff = time_diff / 3600
-                            
-                            if hours_diff <= max_hours and time_diff < min_diff_within_window:
-                                min_diff_within_window = time_diff
-                                best_price_within_window = price
-                            
-                            if time_diff < min_diff:
-                                min_diff = time_diff
-                                best_price = price
-                
-                if best_price_within_window:
-                    return best_price_within_window
-                elif best_price:
-                    return best_price
-        
-        return None
-    
-    def build_price_feed(self, trades: List[Dict]):
-        """
-        Build price feed from all trades that have USD pairs
-        Stores prices by token address and timestamp
-        Also builds symbol -> address mapping for lookup
-        Processes trades in chronological order to build feed progressively
-        """
-        print("\nBuilding price feed from trades...")
-        
-        # Sort trades by timestamp to process chronologically
-        sorted_trades = sorted(trades, key=lambda t: t.get('timestamp', 0))
-        
-        for trade in sorted_trades:
-            source_price, target_price = self.calculate_price_from_trade(trade)
-            
-            token_in_meta = trade.get('token_in_metadata', {})
-            token_out_meta = trade.get('token_out_metadata', {})
-            timestamp = trade.get('timestamp', 0)
-            
-            token_in_addr = token_in_meta.get('address', '').lower()
-            token_out_addr = token_out_meta.get('address', '').lower()
-            token_in_symbol = token_in_meta.get('symbol', '').upper()
-            token_out_symbol = token_out_meta.get('symbol', '').upper()
-            
-            # Store prices in feed
-            if source_price:
-                if token_in_addr not in self.price_feed:
-                    self.price_feed[token_in_addr] = []
-                self.price_feed[token_in_addr].append((timestamp, source_price))
-                
-                # Map symbol to address
-                if token_in_symbol:
-                    if token_in_symbol not in self.symbol_to_addresses:
-                        self.symbol_to_addresses[token_in_symbol] = set()
-                    self.symbol_to_addresses[token_in_symbol].add(token_in_addr)
-            
-            if target_price:
-                if token_out_addr not in self.price_feed:
-                    self.price_feed[token_out_addr] = []
-                self.price_feed[token_out_addr].append((timestamp, target_price))
-                
-                # Map symbol to address
-                if token_out_symbol:
-                    if token_out_symbol not in self.symbol_to_addresses:
-                        self.symbol_to_addresses[token_out_symbol] = set()
-                    self.symbol_to_addresses[token_out_symbol].add(token_out_addr)
-        
-        print(f"  ✓ Built price feed with {len(self.price_feed)} tokens")
-    
     def calculate_prices_for_trade(self, trade: Dict) -> Tuple[Optional[float], Optional[float], str]:
         """
-        Calculate USD prices for a trade using multiple strategies
+        Calculate USD prices for a trade using CoinGecko as primary source
         Returns: (source_price_usd, target_price_usd, price_source)
-        price_source: "stablecoin", "feed", "coingecko", "derived", "unavailable"
-        """
-        # Strategy 1: Direct calculation from stablecoin trade
-        source_price, target_price = self.calculate_price_from_trade(trade)
-        if source_price and target_price:
-            return source_price, target_price, "stablecoin"
+        price_source: "coingecko", "coingecko_with_ratio", "stablecoin_ratio", "unavailable"
         
+        Strategy priority:
+        1. CoinGecko for both tokens (primary)
+        2. CoinGecko for one token + swap ratio for other (fallback)
+        3. Stablecoin = $1.00 + swap ratio (last resort if CoinGecko fails for stablecoin)
+        4. Unavailable (if no options)
+        """
         token_in_meta = trade.get('token_in_metadata', {})
         token_out_meta = trade.get('token_out_metadata', {})
         
@@ -288,96 +288,62 @@ class PriceFeedBuilder:
         target_amount = float(trade.get('amount_out_formatted', '0'))
         timestamp = trade.get('timestamp', 0)
         
-        token_in_addr = token_in_meta.get('address', '').lower()
-        token_out_addr = token_out_meta.get('address', '').lower()
+        # Strategy 1: Try CoinGecko for both tokens (primary)
+        source_price = self.get_coingecko_price(source_symbol, timestamp)
+        target_price = self.get_coingecko_price(target_symbol, timestamp)
         
-        # Strategy 2: Try price feed with extended time window (30 days, or closest available)
-        if not source_price:
-            source_price = self.find_price_in_feed(token_in_addr, source_symbol, timestamp, max_hours=720)
-        
-        if not target_price:
-            target_price = self.find_price_in_feed(token_out_addr, target_symbol, timestamp, max_hours=720)
-        
-        # If we have both prices, return immediately
-        if source_price and target_price:
-            return source_price, target_price, "feed"
-        
-        # Strategy 2b: If we have one price, calculate the other from exchange ratio
-        if source_price and not target_price and source_amount > 0 and target_amount > 0:
-            total_value_usd = source_price * source_amount
-            target_price = total_value_usd / target_amount
-            return source_price, target_price, "calculated_from_feed"
-        
-        if target_price and not source_price and source_amount > 0 and target_amount > 0:
-            total_value_usd = target_price * target_amount
-            source_price = total_value_usd / source_amount
-            return source_price, target_price, "calculated_from_feed"
-        
-        # Strategy 3: Try CoinGecko for missing prices
-        if not source_price:
-            source_price = self.get_coingecko_price(source_symbol, timestamp)
-        
-        if not target_price:
-            target_price = self.get_coingecko_price(target_symbol, timestamp)
-        
-        # If CoinGecko gave us both, return
+        # Case 1: Both found in CoinGecko
         if source_price and target_price:
             return source_price, target_price, "coingecko"
         
-        # Strategy 3b: If CoinGecko gave us one price, calculate the other
-        if source_price and not target_price and source_amount > 0 and target_amount > 0:
-            total_value_usd = source_price * source_amount
-            target_price = total_value_usd / target_amount
-            return source_price, target_price, "calculated_from_coingecko"
+        # Case 2: Source found, target not found - calculate target from swap ratio
+        if source_price and not target_price:
+            if source_amount > 0 and target_amount > 0:
+                target_price = (source_amount / target_amount) * source_price
+                return source_price, target_price, "coingecko_with_ratio"
         
-        if target_price and not source_price and source_amount > 0 and target_amount > 0:
-            total_value_usd = target_price * target_amount
-            source_price = total_value_usd / source_amount
-            return source_price, target_price, "calculated_from_coingecko"
+        # Case 3: Target found, source not found - calculate source from swap ratio
+        if target_price and not source_price:
+            if source_amount > 0 and target_amount > 0:
+                source_price = (target_amount / source_amount) * target_price
+                return source_price, target_price, "coingecko_with_ratio"
         
-        # Strategy 4: Protocol token - try underlying asset from price feed
-        if not source_price:
-            underlying_source = self.extract_underlying_asset(source_symbol)
-            if underlying_source:
-                underlying_price = self.find_price_in_feed(None, underlying_source, timestamp)
-                if underlying_price and source_amount > 0 and target_amount > 0:
-                    # Calculate protocol token price from exchange ratio
-                    exchange_ratio = target_amount / source_amount
-                    if target_price:
-                        source_price = target_price * exchange_ratio
-                        return source_price, target_price, "derived"
-                    else:
-                        # Use underlying price as base
-                        source_price = underlying_price * exchange_ratio
-                        target_price = underlying_price
-                        return source_price, target_price, "derived"
+        # Case 4: Both not found - check if one is stablecoin
+        if not source_price and not target_price:
+            # Check if source is stablecoin - try CoinGecko specifically for it
+            if self.is_stablecoin(source_symbol):
+                source_price = self.get_coingecko_price(source_symbol, timestamp)
+                if source_price:
+                    # Got stablecoin price from CoinGecko, calculate target
+                    if source_amount > 0 and target_amount > 0:
+                        target_price = (source_amount / target_amount) * source_price
+                        return source_price, target_price, "coingecko_with_ratio"
+                else:
+                    # CoinGecko failed for stablecoin, assume $1.00
+                    source_price = 1.0
+                    if source_amount > 0 and target_amount > 0:
+                        target_price = source_amount / target_amount
+                        return source_price, target_price, "stablecoin_ratio"
+            
+            # Check if target is stablecoin - try CoinGecko specifically for it
+            elif self.is_stablecoin(target_symbol):
+                target_price = self.get_coingecko_price(target_symbol, timestamp)
+                if target_price:
+                    # Got stablecoin price from CoinGecko, calculate source
+                    if source_amount > 0 and target_amount > 0:
+                        source_price = (target_amount / source_amount) * target_price
+                        return source_price, target_price, "coingecko_with_ratio"
+                else:
+                    # CoinGecko failed for stablecoin, assume $1.00
+                    target_price = 1.0
+                    if source_amount > 0 and target_amount > 0:
+                        source_price = target_amount / source_amount
+                        return source_price, target_price, "stablecoin_ratio"
+            
+            # Neither is stablecoin, no prices available
+            return None, None, "unavailable"
         
-        if not target_price:
-            underlying_target = self.extract_underlying_asset(target_symbol)
-            if underlying_target:
-                underlying_price = self.find_price_in_feed(None, underlying_target, timestamp)
-                if underlying_price and source_amount > 0 and target_amount > 0:
-                    exchange_ratio = source_amount / target_amount
-                    if source_price:
-                        target_price = source_price * exchange_ratio
-                        return source_price, target_price, "derived"
-                    else:
-                        target_price = underlying_price * exchange_ratio
-                        source_price = underlying_price
-                        return source_price, target_price, "derived"
-        
-        # Strategy 5: If one price is known, calculate the other from ratio
-        if source_price and source_amount > 0 and target_amount > 0:
-            total_value_usd = source_price * source_amount
-            target_price = total_value_usd / target_amount
-            return source_price, target_price, "calculated"
-        
-        if target_price and source_amount > 0 and target_amount > 0:
-            total_value_usd = target_price * target_amount
-            source_price = total_value_usd / source_amount
-            return source_price, target_price, "calculated"
-        
-        # No price available
+        # Should not reach here, but return unavailable as fallback
         return None, None, "unavailable"
 
 
@@ -397,52 +363,13 @@ def add_prices_to_trades(enriched_json_file: str, output_json_file: str):
     
     price_builder = PriceFeedBuilder()
     
-    # Build initial price feed from trades with stablecoin pairs
-    price_builder.build_price_feed(trades)
-    
-    # Sort trades chronologically to use earlier prices for later trades
-    sorted_trades = sorted(trades, key=lambda t: t.get('timestamp', 0))
-    
-    # Calculate prices for each trade in chronological order
+    # Calculate prices for each trade
     priced_count = 0
     unavailable_count = 0
     price_sources = defaultdict(int)
     
-    for trade in sorted_trades:
+    for trade in trades:
         source_price, target_price, price_source = price_builder.calculate_prices_for_trade(trade)
-        
-        # Store newly calculated prices in feed for future trades
-        if source_price or target_price:
-            token_in_meta = trade.get('token_in_metadata', {})
-            token_out_meta = trade.get('token_out_metadata', {})
-            timestamp = trade.get('timestamp', 0)
-            
-            token_in_addr = token_in_meta.get('address', '').lower()
-            token_out_addr = token_out_meta.get('address', '').lower()
-            token_in_symbol = token_in_meta.get('symbol', '').upper()
-            token_out_symbol = token_out_meta.get('symbol', '').upper()
-            
-            if source_price and token_in_addr:
-                if token_in_addr not in price_builder.price_feed:
-                    price_builder.price_feed[token_in_addr] = []
-                price_builder.price_feed[token_in_addr].append((timestamp, source_price))
-                
-                # Update symbol mapping
-                if token_in_symbol:
-                    if token_in_symbol not in price_builder.symbol_to_addresses:
-                        price_builder.symbol_to_addresses[token_in_symbol] = set()
-                    price_builder.symbol_to_addresses[token_in_symbol].add(token_in_addr)
-            
-            if target_price and token_out_addr:
-                if token_out_addr not in price_builder.price_feed:
-                    price_builder.price_feed[token_out_addr] = []
-                price_builder.price_feed[token_out_addr].append((timestamp, target_price))
-                
-                # Update symbol mapping
-                if token_out_symbol:
-                    if token_out_symbol not in price_builder.symbol_to_addresses:
-                        price_builder.symbol_to_addresses[token_out_symbol] = set()
-                    price_builder.symbol_to_addresses[token_out_symbol].add(token_out_addr)
         
         trade['source_price_usd'] = source_price
         trade['target_price_usd'] = target_price

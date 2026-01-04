@@ -6,7 +6,7 @@ Runs fetch_all_trades.py for each supported chain
 
 import os
 import sys
-from chains_config import SUPPORTED_CHAINS
+from chains_config import SUPPORTED_CHAINS, is_evm_chain
 from fetch_all_trades import main as fetch_trades_main
 
 def main():
@@ -27,13 +27,16 @@ def main():
         print("Error: WALLET_ADDRESSES not set")
         sys.exit(1)
     
+    # Filter to only EVM chains (exclude Solana, Sui, etc.)
+    evm_chains = [chain for chain in SUPPORTED_CHAINS if is_evm_chain(chain)]
+    
     print("=" * 80)
-    print("Multi-Chain DEX Trade Extractor")
+    print("Multi-Chain DEX Trade Extractor (EVM Chains Only)")
     print("=" * 80)
     print(f"Addresses ({len(WALLET_ADDRESSES)}):")
     for addr in WALLET_ADDRESSES:
         print(f"  - {addr}")
-    print(f"Chains to process: {', '.join(SUPPORTED_CHAINS)}")
+    print(f"EVM Chains to process: {', '.join(evm_chains)}")
     print(f"Output CSV: evm_trades.csv")
     print("=" * 80)
     print()
@@ -54,7 +57,7 @@ def main():
         print(f"Processing Address: {address}")
         print("=" * 80)
         
-        for chain in SUPPORTED_CHAINS:
+        for chain in evm_chains:
             print("\n" + "=" * 80)
             print(f"Processing {chain.upper()} for {address[:10]}...")
             print("=" * 80)

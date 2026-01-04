@@ -65,8 +65,13 @@ class SuiTradeParser(BlockchainTradeParser):
                 return parts[-1].rstrip('>').upper()
         return coin_type[:20] + '...' if len(coin_type) > 20 else coin_type
     
+    def _is_sui_coin(self, coin_type: str) -> bool:
+        """Check if coin type is SUI (native gas token)"""
+        coin_lower = coin_type.lower()
+        return '0x2::sui::sui' in coin_lower or coin_lower.endswith('::sui::sui') or coin_lower == 'sui'
+    
     def _parse_swap_from_transfers(self, tx_hash: str, transfers: List[Dict]) -> Optional[Dict]:
-        """Parse a swap from token transfers"""
+        """Parse a swap from token transfers, filtering out gas payments"""
         our_address_lower = self.address.lower()
         
         # Aggregate amounts by coin type across ALL transfers
@@ -74,19 +79,30 @@ class SuiTradeParser(BlockchainTradeParser):
         coins_sent = {}  # coin_type -> total_amount
         coins_received = {}  # coin_type -> total_amount
         
+        # Track SUI transfers to identify gas payments
+        sui_sent_to_none = False
+        sui_sent_to_address = False
+        
         for transfer in transfers:
             from_addr = (transfer.get('from') or '').lower()
-            to_addr = (transfer.get('to') or '').lower()
+            to_addr = transfer.get('to')  # Can be None for gas payments
             value = int(transfer.get('value', '0'))
             coin_type = transfer.get('contractAddress', '')  # Coin type stored here
             
             # Normalize coin type
             coin_type_normalized = self._normalize_coin_type(coin_type)
             
+            # Check if this is SUI being sent (for gas detection)
+            if self._is_sui_coin(coin_type) and from_addr == our_address_lower:
+                if to_addr is None:
+                    sui_sent_to_none = True
+                elif to_addr:
+                    sui_sent_to_address = True
+            
             # Check if this transfer involves our address
             if from_addr == our_address_lower:
                 coins_sent[coin_type_normalized] = coins_sent.get(coin_type_normalized, 0) + value
-            if to_addr == our_address_lower:
+            if to_addr and to_addr.lower() == our_address_lower:
                 coins_received[coin_type_normalized] = coins_received.get(coin_type_normalized, 0) + value
         
         # A swap requires: we sent something AND received something different
@@ -101,8 +117,21 @@ class SuiTradeParser(BlockchainTradeParser):
         
         # Only return if it's a real swap: different coins, both amounts > 0
         if coin_in != coin_out and amount_in > 0 and amount_out > 0:
+            # FILTER OUT GAS TRANSACTIONS
+            # If SUI < 0.02 is sent to None (system), it's gas payment, not a swap
+            if self._is_sui_coin(coin_in):
+                # Convert amount to SUI (assuming 9 decimals for SUI)
+                sui_amount = amount_in / 1e9
+                
+                # If SUI < 0.02 is sent to None, it's gas, not a swap
+                if sui_amount < 0.02 and sui_sent_to_none and not sui_sent_to_address:
+                    # This is a gas payment, not a swap - filter it out
+                    return None
+            
             tx = self.normal_txs_by_hash.get(tx_hash)
-            block_number = tx.get('blockNumber', 0) if tx else 0
+            # Ensure block_number is always an integer
+            block_number_raw = tx.get('blockNumber', 0) if tx else 0
+            block_number = int(block_number_raw) if block_number_raw else 0
             timestamp = tx.get('timeStamp', 0) if tx else 0
             
             return {
@@ -155,7 +184,8 @@ class SuiTradeParser(BlockchainTradeParser):
                     print(f"  Found swap: {in_symbol} -> {out_symbol} - Checkpoint {swap['block_number']}")
         
         # Sort by block number (checkpoint)
-        self.trades.sort(key=lambda x: x['block_number'])
+        # Convert block_number to int for sorting (handle cases where it might be string or None)
+        self.trades.sort(key=lambda x: int(x.get('block_number', 0) or 0))
         
         print(f"\n✓ Identified {len(self.trades)} DEX trades")
         return self.trades

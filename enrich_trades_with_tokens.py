@@ -335,6 +335,14 @@ class SolanaTokenMetadataFetcher:
 class SuiTokenMetadataFetcher:
     """Fetches token metadata from Sui RPC"""
     
+    # Known Sui tokens with their correct decimals
+    # Most Sui tokens use 9 decimals, but stablecoins typically use 6
+    SUI_TOKEN_DECIMALS = {
+        'USDC': 6,  # USDC on Sui uses 6 decimals
+        'USDT': 6,  # USDT on Sui uses 6 decimals
+        'SUI': 9,   # Native SUI uses 9 decimals
+    }
+    
     def __init__(self, rpc_endpoint: str):
         self.rpc_endpoint = rpc_endpoint
         self.cache = {}
@@ -364,8 +372,8 @@ class SuiTokenMetadataFetcher:
                     symbol = parts[-1].rstrip('>').upper()
                     name = f"{symbol} Token"
                     
-                    # Default decimals for Sui coins
-                    decimals = 9
+                    # Get decimals - use known decimals for common tokens, default to 9
+                    decimals = self.SUI_TOKEN_DECIMALS.get(symbol, 9)
                     
                     token_info = {
                         'name': name,

@@ -30,3 +30,9 @@ ethereum_settings.py
 Thumbs.db
 
 *.log
+
+# CoinGecko price cache
+coingecko_cache.json
+
+# CoinGecko symbol mapping (refreshed on every flow start)
+coingecko_symbol_mapping.json

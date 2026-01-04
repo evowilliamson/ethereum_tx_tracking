@@ -40,17 +40,19 @@ API_KEYS = {
 WALLET_ADDRESS = os.getenv("WALLET_ADDRESS", "0xb77Cb8F81A0f704E1E858EBa57C67c072ABBFCAD")
 
 # List of wallet addresses to process
-# If WALLET_ADDRESSES env var is set, use that; otherwise use WALLET_ADDRESS as a single-item list
+# If WALLET_ADDRESSES env var is set, use that; otherwise use WALLET_ADDRESS and add additional addresses
 _WALLET_ADDRESSES_ENV = os.getenv("WALLET_ADDRESSES", "")
 if _WALLET_ADDRESSES_ENV:
     # Parse comma-separated addresses
     WALLET_ADDRESSES = [addr.strip() for addr in _WALLET_ADDRESSES_ENV.split(',') if addr.strip()]
 else:
-    # Use single address as list, or add additional addresses here
-    WALLET_ADDRESSES = [
-        "0xb77Cb8F81A0f704E1E858EBa57C67c072ABBFCAD",
+    # Start with WALLET_ADDRESS and add additional addresses
+    WALLET_ADDRESSES = [WALLET_ADDRESS]
+    # Add additional addresses here if needed
+    additional_addresses = [
         "0x302d129011fB164D8D5FE93cD1E8795D61C4f76F"
     ]
+    WALLET_ADDRESSES.extend(additional_addresses)
 
 # Optional: Output file name (default: ethereum_trades.json)
 OUTPUT_FILE = os.getenv("OUTPUT_FILE", "ethereum_trades.json")

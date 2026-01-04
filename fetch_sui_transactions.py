@@ -135,12 +135,25 @@ class SuiTransactionFetcher(BlockchainTransactionFetcher):
         return None
     
     def fetch_all_transaction_digests(self) -> List[str]:
-        """Fetch all transaction digests for the address using GraphQL"""
+        """
+        Fetch all transaction digests for the address using GraphQL
+        
+        DEBUG MODE: Set environment variable SUI_DEBUG_MODE=true to fetch only first page (50 txs)
+        This speeds up testing significantly. Example: SUI_DEBUG_MODE=true python3 fetch_all_trades.py sui
+        """
+        import os
+        
+        # Debug mode: only fetch first page for faster testing (SUI only)
+        # Set SUI_DEBUG_MODE=true environment variable to enable
+        debug_mode = os.getenv('SUI_DEBUG_MODE', 'false').lower() == 'true'
+        
         all_digests = []
         cursor = None
         page = 0
         
         print("Fetching transaction digests via GraphQL...")
+        if debug_mode:
+            print("  [DEBUG MODE: Only fetching first page - set SUI_DEBUG_MODE=false to fetch all]")
         
         while True:
             page += 1
@@ -181,6 +194,11 @@ class SuiTransactionFetcher(BlockchainTransactionFetcher):
                 all_digests.append(tx['digest'])
             
             print(f"  Page {page}: +{len(txs)} txs (total: {len(all_digests)})")
+            
+            # In debug mode, only fetch first page
+            if debug_mode:
+                print("  [DEBUG MODE: Stopping after first page]")
+                break
             
             if not page_info['hasNextPage']:
                 break
