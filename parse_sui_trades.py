@@ -52,38 +52,29 @@ class SuiTradeParser(BlockchainTradeParser):
     
     def _normalize_coin_type(self, coin_type: str) -> str:
         """Normalize Sui coin type to a consistent format"""
-        # Sui coin types can be in different formats
-        # 0x2::coin::Coin<0x...::TOKEN::TOKEN>
-        # We'll extract the token identifier
+        # Keep the full coin type for accuracy, just clean up formatting
+        # Sui coin types look like: 0x2::sui::SUI or 0xabcd...::module::TOKEN
+        return coin_type.lower().strip()
+    
+    def _get_coin_symbol(self, coin_type: str) -> str:
+        """Extract readable symbol from coin type for display"""
+        # Extract just the token symbol for display purposes
         if '::' in coin_type:
             parts = coin_type.split('::')
             if len(parts) >= 3:
-                # Extract the token identifier (last part before closing bracket)
-                token_part = parts[-1].rstrip('>')
-                return token_part
-        return coin_type
+                return parts[-1].rstrip('>').upper()
+        return coin_type[:20] + '...' if len(coin_type) > 20 else coin_type
     
     def _parse_swap_from_transfers(self, tx_hash: str, transfers: List[Dict]) -> Optional[Dict]:
         """Parse a swap from token transfers"""
         our_address_lower = self.address.lower()
         
-        # Find transfers involving our address
-        our_transfers = []
-        for transfer in transfers:
-            from_addr = (transfer.get('from') or '').lower()
-            to_addr = (transfer.get('to') or '').lower()
-            
-            if from_addr == our_address_lower or to_addr == our_address_lower:
-                our_transfers.append(transfer)
-        
-        if len(our_transfers) < 2:
-            return None
-        
-        # Aggregate amounts by coin type
+        # Aggregate amounts by coin type across ALL transfers
+        # In Sui, balance changes show: from=address (send), to=address (receive)
         coins_sent = {}  # coin_type -> total_amount
         coins_received = {}  # coin_type -> total_amount
         
-        for transfer in our_transfers:
+        for transfer in transfers:
             from_addr = (transfer.get('from') or '').lower()
             to_addr = (transfer.get('to') or '').lower()
             value = int(transfer.get('value', '0'))
@@ -92,19 +83,24 @@ class SuiTradeParser(BlockchainTradeParser):
             # Normalize coin type
             coin_type_normalized = self._normalize_coin_type(coin_type)
             
+            # Check if this transfer involves our address
             if from_addr == our_address_lower:
                 coins_sent[coin_type_normalized] = coins_sent.get(coin_type_normalized, 0) + value
-            elif to_addr == our_address_lower:
+            if to_addr == our_address_lower:
                 coins_received[coin_type_normalized] = coins_received.get(coin_type_normalized, 0) + value
         
+        # A swap requires: we sent something AND received something different
+        if not coins_sent or not coins_received:
+            return None
+        
         # Find the coin we sent most (coin in) and received most (coin out)
-        coin_in = max(coins_sent.items(), key=lambda x: x[1])[0] if coins_sent else None
-        coin_out = max(coins_received.items(), key=lambda x: x[1])[0] if coins_received else None
-        amount_in = coins_sent.get(coin_in, 0) if coin_in else 0
-        amount_out = coins_received.get(coin_out, 0) if coin_out else 0
+        coin_in = max(coins_sent.items(), key=lambda x: x[1])[0]
+        coin_out = max(coins_received.items(), key=lambda x: x[1])[0]
+        amount_in = coins_sent[coin_in]
+        amount_out = coins_received[coin_out]
         
         # Only return if it's a real swap: different coins, both amounts > 0
-        if coin_in and coin_out and coin_in != coin_out and amount_in > 0 and amount_out > 0:
+        if coin_in != coin_out and amount_in > 0 and amount_out > 0:
             tx = self.normal_txs_by_hash.get(tx_hash)
             block_number = tx.get('blockNumber', 0) if tx else 0
             timestamp = tx.get('timeStamp', 0) if tx else 0
@@ -148,12 +144,15 @@ class SuiTradeParser(BlockchainTradeParser):
                 for t in transfers
             )
             
-            if involves_us and len(transfers) >= 2:
+            # Try to parse swap even with just 1 transfer (might be single balance change showing swap)
+            if involves_us and len(transfers) >= 1:
                 swap = self._parse_swap_from_transfers(tx_hash, transfers)
                 if swap:
                     self.trades.append(swap)
                     processed_hashes.add(tx_hash)
-                    print(f"  Found swap: {swap['dex']} - Checkpoint {swap['block_number']}")
+                    in_symbol = self._get_coin_symbol(swap['token_in'])
+                    out_symbol = self._get_coin_symbol(swap['token_out'])
+                    print(f"  Found swap: {in_symbol} -> {out_symbol} - Checkpoint {swap['block_number']}")
         
         # Sort by block number (checkpoint)
         self.trades.sort(key=lambda x: x['block_number'])

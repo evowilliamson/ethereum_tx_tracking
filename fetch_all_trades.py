@@ -252,7 +252,11 @@ def main(chain_name=None, address=None, output_csv=None, append_mode=False):
     
     # Use provided output_csv or default
     if output_csv is None:
-        output_csv = "evm_trades.csv"
+        if is_evm_chain(blockchain):
+            output_csv = "evm_trades.csv"
+        else:
+            # Non-EVM chains get their own CSV file
+            output_csv = f"{blockchain}_trades.csv"
     
     # Get chain-specific API key/RPC endpoint
     try:
