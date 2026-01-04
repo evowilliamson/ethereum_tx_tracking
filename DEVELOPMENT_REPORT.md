@@ -64,7 +64,7 @@ This report documents the development of a comprehensive Ethereum DEX trade extr
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  ethereum_settings.py (API key, wallet address)         │
+│  blockchain_settings.py (API key, wallet address)         │
 └─────────────────────────────────────────────────────────┘
                         ↓
 ┌─────────────────────────────────────────────────────────┐
@@ -529,7 +529,7 @@ Match Rate: 100.0% (296/296)
 
 ### Core System Files
 - `ethereum_config.py` - DEX router configuration
-- `ethereum_settings.py` - API key and wallet address
+- `blockchain_settings.py` - API key and wallet address
 - `fetch_ethereum_transactions.py` - Transaction fetcher
 - `parse_ethereum_trades.py` - Trade parser
 - `enrich_trades_with_tokens.py` - Token metadata enrichment

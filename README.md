@@ -70,10 +70,10 @@ pip install python-dotenv  # For .env file support
 
 1. Copy the example settings file:
    ```bash
-   cp ethereum_settings.py.example ethereum_settings.py
+   cp blockchain_settings.py.example blockchain_settings.py
    ```
 
-2. Edit `ethereum_settings.py` and add:
+2. Edit `blockchain_settings.py` and add:
    - Your Etherscan API key
    - Your wallet address(es)
    - Optional: Chain-specific API keys
@@ -89,7 +89,7 @@ pip install python-dotenv  # For .env file support
    ]
    ```
 
-**Important**: `ethereum_settings.py` is gitignored to protect your API keys and addresses. Never commit this file!
+**Important**: `blockchain_settings.py` is gitignored to protect your API keys and addresses. Never commit this file!
 
 ### Step 4: (Optional) Environment Variables
 
@@ -277,7 +277,7 @@ Some chains may work better with their native explorer API keys:
 - Polygon: [https://polygonscan.com/apis](https://polygonscan.com/apis)
 - Optimism: [https://optimistic.etherscan.io/apis](https://optimistic.etherscan.io/apis)
 
-Add chain-specific keys in `ethereum_settings.py`:
+Add chain-specific keys in `blockchain_settings.py`:
 
 ```python
 API_KEYS = {
@@ -367,7 +367,7 @@ SUPPORTED_CHAINS = ['ethereum', 'arbitrum']  # Only these chains
 
 ### Processing Single Address
 
-Edit `ethereum_settings.py`:
+Edit `blockchain_settings.py`:
 
 ```python
 WALLET_ADDRESSES = ["0xYourAddress"]
@@ -390,14 +390,14 @@ Currently processes all historical transactions. To limit date range, modify `fe
 ├── calculate_prices.py                # USD price calculation
 ├── chains_config.py                   # Chain configurations
 ├── ethereum_config.py                 # DEX router addresses
-├── ethereum_settings.py.example       # Settings template
-├── ethereum_settings.py               # Your settings (gitignored)
+├── blockchain_settings.py.example       # Settings template
+├── blockchain_settings.py               # Your settings (gitignored)
 └── known_tokens.py                    # Known token metadata database
 ```
 
 ## Privacy & Security
 
-- **API Keys**: Never commit `ethereum_settings.py` (it's in `.gitignore`)
+- **API Keys**: Never commit `blockchain_settings.py` (it's in `.gitignore`)
 - **Wallet Addresses**: Wallet addresses are public on-chain, but be careful with API keys
 - **Transaction Data**: All data is fetched from public blockchain explorers
 

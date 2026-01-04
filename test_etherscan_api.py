@@ -4,7 +4,7 @@ Quick test script to verify Etherscan API connection
 
 import requests
 import json
-from ethereum_settings import ETHERSCAN_API_KEY, WALLET_ADDRESS
+from blockchain_settings import ETHERSCAN_API_KEY, WALLET_ADDRESS
 from ethereum_config import ETHERSCAN_API_BASE, ETHEREUM_CHAIN_ID
 
 def test_api():

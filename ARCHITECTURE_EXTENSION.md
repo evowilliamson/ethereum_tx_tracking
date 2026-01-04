@@ -118,7 +118,7 @@ All parsers return trades in this format:
 
 ### Configuration
 
-Add RPC endpoints to `ethereum_settings.py`:
+Add RPC endpoints to `blockchain_settings.py`:
 ```python
 RPC_ENDPOINTS = {
     'solana': 'https://api.mainnet-beta.solana.com',

@@ -13,10 +13,10 @@ def main():
     """Generate trades for all configured blockchains"""
     # Load settings
     try:
-        from ethereum_settings import ETHERSCAN_API_KEY, WALLET_ADDRESSES
+        from blockchain_settings import ETHERSCAN_API_KEY, WALLET_ADDRESSES
     except ImportError:
-        print("Error: ethereum_settings.py not found!")
-        print("Please copy ethereum_settings.py.example to ethereum_settings.py and configure it.")
+        print("Error: blockchain_settings.py not found!")
+        print("Please copy blockchain_settings.py.example to blockchain_settings.py and configure it.")
         sys.exit(1)
     
     if ETHERSCAN_API_KEY == "YOUR_API_KEY_HERE" or not ETHERSCAN_API_KEY:
