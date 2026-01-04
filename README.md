@@ -358,6 +358,309 @@ These intermediate files are useful for debugging but can be deleted to save spa
 
 The CSV format uses tab-separated values with clear column headers. Most tax software can import this format directly or with minor adjustments.
 
+## CryptoCompare Hourly Price Data
+
+This tool includes functionality to download historical hourly cryptocurrency price data from CryptoCompare API.
+
+### Features
+
+- 📊 **Hourly Historical Data**: Downloads hourly price data for any cryptocurrency
+- 💾 **Dual Storage**: Saves data to both CSV files and QuestDB database
+- 🔄 **Incremental Updates**: Smart deduplication - only inserts new data, updates existing records
+- 📅 **Flexible Date Ranges**: Fetch all available data or specify a date range
+- ⚡ **Efficient Pagination**: Automatically handles API pagination for large datasets
+- 🔒 **Data Integrity**: Atomic file operations prevent data corruption
+
+### Installation
+
+#### 1. Install Python Dependencies
+
+```bash
+pip install requests psycopg2-binary
+```
+
+#### 2. Install QuestDB (Optional but Recommended)
+
+QuestDB is an open-source time-series database optimized for fast queries. It's optional - the script works with CSV-only mode if QuestDB is not installed.
+
+**Quick Installation (Ubuntu/Debian):**
+
+```bash
+./install_questdb.sh
+```
+
+This script:
+- Downloads and installs QuestDB binary
+- Installs Java (OpenJDK 17) if needed
+- Installs Python package `psycopg2-binary`
+- Sets up QuestDB in `/opt/questdb`
+
+**Manual Installation:**
+
+Follow the instructions at [https://questdb.io/get-questdb/](https://questdb.io/get-questdb/)
+
+**Start QuestDB:**
+
+```bash
+./start_questdb.sh
+```
+
+This starts QuestDB with data directory: `~/.dex_trades_extractor/.questdb/`
+
+**Stop QuestDB:**
+
+```bash
+./stop_questdb.sh
+```
+
+**Uninstall QuestDB:**
+
+```bash
+./uninstall_questdb.sh
+```
+
+For more details, see `QUESTDB_SETUP.md`.
+
+### Usage
+
+#### Basic Usage - Fetch All Available Data
+
+```bash
+python3 download_cryptocompare_hourly.py BTC USD
+```
+
+This downloads all available hourly data for BTC/USD from the earliest point in time.
+
+#### Fetch Specific Date Range
+
+```bash
+python3 download_cryptocompare_hourly.py BTC USD 2025/01/01 2025/09/01
+```
+
+This downloads hourly data from `2025/01/01 00:00:00` to `(2025/09/01 + 1 day) 00:00:00` (exclusive).
+
+**Date Format**: `YYYY/MM/DD`
+
+**Examples:**
+
+```bash
+# Fetch BTC data for January 2025
+python3 download_cryptocompare_hourly.py BTC USD 2025/01/01 2025/01/31
+
+# Fetch ETH data for Q1 2021
+python3 download_cryptocompare_hourly.py ETH USD 2021/01/01 2021/03/31
+
+# Fetch all available BTC data
+python3 download_cryptocompare_hourly.py BTC USD
+```
+
+#### API Key (Optional)
+
+The script works with CryptoCompare's free tier (no API key required). For higher rate limits, you can provide an API key:
+
+```bash
+export CRYPTOCOMPARE_API_KEY="your_api_key_here"
+python3 download_cryptocompare_hourly.py BTC USD 2025/01/01 2025/09/01
+```
+
+Get a free API key at [https://www.cryptocompare.com/cryptopian/api-keys](https://www.cryptocompare.com/cryptopian/api-keys)
+
+### Output
+
+#### CSV Files
+
+CSV files are stored in: `~/.dex_trades_extractor/.files/price/cryptocompare/`
+
+**Filename format**: `<symbol>.csv` (e.g., `btc.csv`, `eth.csv`)
+
+**CSV Format:**
+
+| Column | Description | Format |
+|--------|-------------|--------|
+| `timestamp` | Unix timestamp | Integer (seconds since epoch) |
+| `datetime` | Human-readable datetime | `YYYY/MM/DD HH:00:00` |
+| `open` | Opening price for the hour | Decimal number |
+
+**Example:**
+
+```csv
+timestamp,datetime,open
+1704067200,2024/01/01 00:00:00,42000.5
+1704070800,2024/01/01 01:00:00,42100.2
+1704074400,2024/01/01 02:00:00,42200.8
+```
+
+**Note**: The `coin` column is NOT included in the CSV file since each file is already per-coin.
+
+#### QuestDB Database
+
+If QuestDB is installed and running, data is also saved to the `crypto_hourly` table.
+
+**Table Schema:**
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `coin` | SYMBOL | Cryptocurrency symbol (e.g., 'BTC') |
+| `timestamp` | TIMESTAMP | Hourly timestamp (designated timestamp) |
+| `datetime` | STRING | Human-readable datetime (`YYYY/MM/DD HH:00:00`) |
+| `open` | DOUBLE | Opening price for the hour |
+
+**Logical Key**: `(coin, timestamp)` - used for deduplication
+
+**Query Example:**
+
+```python
+from questdb import get_questdb_connection, get_crypto_data
+
+conn = get_questdb_connection()
+data = get_crypto_data(conn, 'BTC', '2025/01/01', '2025/01/31')
+# Returns list of dictionaries with 'coin', 'timestamp', 'datetime', 'open'
+```
+
+Or via SQL:
+
+```sql
+SELECT coin, timestamp, datetime, open 
+FROM crypto_hourly 
+WHERE coin = 'BTC' 
+AND timestamp >= '2025-01-01 00:00:00' 
+AND timestamp <= '2025-01-31 23:59:59'
+ORDER BY timestamp ASC;
+```
+
+### Data Management
+
+#### Incremental Updates
+
+The script automatically handles incremental updates:
+
+1. **Loads existing data** from CSV and QuestDB
+2. **Fetches new data** from CryptoCompare API
+3. **Deduplicates** - only inserts data that doesn't exist
+4. **Updates** existing records with latest data
+5. **Saves** updated data back to CSV and QuestDB
+
+**Example:** Running the script twice with the same date range:
+
+```bash
+# First run - inserts new data
+python3 download_cryptocompare_hourly.py BTC USD 2025/01/01 2025/09/01
+# ✓ Inserted 5856 new rows to QuestDB
+
+# Second run - updates existing data, no duplicates
+python3 download_cryptocompare_hourly.py BTC USD 2025/01/01 2025/09/01
+# → Updated 1488 existing rows in data_dict, added 0 new rows
+```
+
+#### Data Merging
+
+The script merges data from multiple sources:
+
+1. **CSV file** - loaded first (if exists)
+2. **QuestDB** - loaded second (if available, takes precedence over CSV)
+3. **API data** - fetched and merged into existing data
+4. **Final save** - writes complete dataset back to CSV and QuestDB
+
+This ensures consistency across both storage formats.
+
+### Supported Cryptocurrencies
+
+The script supports any cryptocurrency available on CryptoCompare. Common examples:
+
+- **BTC** (Bitcoin)
+- **ETH** (Ethereum)
+- **USDT** (Tether)
+- **BNB** (Binance Coin)
+- **SOL** (Solana)
+- **ADA** (Cardano)
+- And hundreds more...
+
+Check [CryptoCompare API](https://min-api.cryptocompare.com/) for full list.
+
+### Data Storage Locations
+
+- **CSV files**: `~/.dex_trades_extractor/.files/price/cryptocompare/`
+- **QuestDB data**: `~/.dex_trades_extractor/.questdb/`
+- **QuestDB web console**: http://localhost:9000
+- **QuestDB PostgreSQL port**: localhost:8812
+
+### Script Options
+
+| Argument | Required | Description | Example |
+|----------|----------|-------------|---------|
+| `SYMBOL` | Yes | Cryptocurrency symbol | `BTC`, `ETH` |
+| `CURRENCY` | Yes | Quote currency | `USD`, `EUR` |
+| `START_DATE` | No | Start date (YYYY/MM/DD) | `2025/01/01` |
+| `END_DATE` | No | End date (YYYY/MM/DD) | `2025/09/01` |
+
+**Notes:**
+- If dates are provided, both `START_DATE` and `END_DATE` must be provided
+- Date range is inclusive for start, exclusive for end (end date + 1 day at 00:00:00)
+- If no dates provided, fetches all available data from earliest point
+
+### Troubleshooting
+
+#### QuestDB Not Running
+
+If you see "Could not connect to QuestDB" messages:
+
+1. Check if QuestDB is running: `questdb status`
+2. Start QuestDB: `./start_questdb.sh`
+3. Script will continue in CSV-only mode if QuestDB is unavailable
+
+#### No Data Retrieved
+
+- **Check symbol**: Verify the symbol exists on CryptoCompare
+- **Check date range**: Ensure dates are valid (YYYY/MM/DD format)
+- **Check API**: Verify CryptoCompare API is accessible
+- **Check rate limits**: Free tier has rate limits - wait a few seconds between runs
+
+#### Data Not Appearing in QuestDB
+
+- **Check connection**: Ensure QuestDB is running (`questdb status`)
+- **Check autocommit**: QuestDB requires autocommit mode (handled automatically by script)
+- **Check web console**: Visit http://localhost:9000 to view data
+- **Check logs**: Use `questdb status` to see logs
+
+#### File Corruption
+
+The script uses atomic file operations (writes to temp file, then replaces original). If script fails:
+
+1. Check for `.tmp` files in the output directory
+2. Remove `.tmp` files if found
+3. Re-run the script - it will rebuild from QuestDB if available
+
+### Advanced Usage
+
+#### Querying QuestDB Data
+
+```python
+from questdb import get_questdb_connection, get_crypto_data
+
+# Get connection
+conn = get_questdb_connection()
+
+# Query data for date range (inclusive on both ends)
+data = get_crypto_data(conn, 'BTC', '2025/01/01', '2025/01/31')
+
+# Process data
+for row in data:
+    print(f"{row['datetime']}: ${row['open']}")
+
+conn.close()
+```
+
+#### Custom Date Range Logic
+
+The script uses the following logic for date ranges:
+
+- **Start date**: `YYYY/MM/DD 00:00:00` (inclusive)
+- **End date**: `(YYYY/MM/DD + 1 day) 00:00:00` (exclusive)
+
+Example: `2025/01/01` to `2025/01/31` includes all hours from:
+- Start: `2025-01-01 00:00:00` (inclusive)
+- End: `2025-02-01 00:00:00` (exclusive, so includes all of Jan 31)
+
 ## Advanced Usage
 
 ### Processing Specific Chains Only
