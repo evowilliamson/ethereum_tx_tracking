@@ -17,10 +17,21 @@ from chains_config import is_evm_chain
 class TokenMetadataFetcher:
     """Fetches token metadata from Etherscan API"""
     
-    def __init__(self, api_key: str):
+    def __init__(self, api_key: str, chain_name: str = 'ethereum'):
         self.api_key = api_key
+        self.chain_name = chain_name.lower()
         self.base_url = ETHERSCAN_API_BASE
         self.cache = {}
+        
+        # Set chain-specific API base URL
+        from chains_config import get_chain_config
+        try:
+            chain_config = get_chain_config(self.chain_name)
+            # For Binance, use ONLY GoldRush API (configured in chains_config.py)
+            if self.chain_name == 'binance':
+                self.base_url = ''  # GoldRush API doesn't use base_url for token info
+        except:
+            pass
         
         # Common tokens cache
         self.cache[ETH_ADDRESS.lower()] = {
@@ -33,9 +44,29 @@ class TokenMetadataFetcher:
             'symbol': 'WETH',
             'decimals': 18
         }
+        
+        # Binance-specific common tokens
+        if self.chain_name == 'binance':
+            self.cache['0x0000000000000000000000000000000000000000'] = {
+                'name': 'Binance Coin',
+                'symbol': 'BNB',
+                'decimals': 18
+            }
+            # WBNB
+            self.cache['0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c'] = {
+                'name': 'Wrapped BNB',
+                'symbol': 'WBNB',
+                'decimals': 18
+            }
+            # USDC on BSC
+            self.cache['0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d'] = {
+                'name': 'USD Coin',
+                'symbol': 'USDC',
+                'decimals': 18
+            }
     
     def fetch_token_info(self, token_address: str) -> Optional[Dict]:
-        """Fetch token name, symbol, and decimals from Etherscan"""
+        """Fetch token name, symbol, and decimals from Etherscan/BSCScan"""
         token_address = token_address.lower()
         
         # Check cache
@@ -51,47 +82,81 @@ class TokenMetadataFetcher:
         # Skip zero address (native token)
         eth_address = '0x0000000000000000000000000000000000000000'
         if token_address == eth_address.lower():
-            return self.cache[eth_address.lower()]
+            return self.cache.get(eth_address.lower(), {
+                'name': 'Native Token',
+                'symbol': 'BNB' if self.chain_name == 'binance' else 'ETH',
+                'decimals': 18
+            })
         
-        try:
-            params = {
-                'module': 'token',
-                'action': 'tokeninfo',
-                'contractaddress': token_address,
-                'apikey': self.api_key
-            }
+        # For Binance, skip Etherscan-compatible API calls (we use GoldRush only)
+        if self.chain_name == 'binance':
+            # Skip Etherscan API, use GoldRush only (handled below)
+            pass
+        elif self.base_url:
+            try:
+                params = {
+                    'module': 'token',
+                    'action': 'tokeninfo',
+                    'contractaddress': token_address,
+                    'apikey': self.api_key
+                }
+                
+                # For other chains, add chainid for V2 API if available
+                if hasattr(self, 'chain_id') and self.chain_id:
+                    params['chainid'] = self.chain_id
+                
+                response = requests.get(self.base_url, params=params, timeout=30)
+                time.sleep(RATE_LIMIT_DELAY)
             
-            # Add chainid for V2 API if available
-            if hasattr(self, 'chain_id') and self.chain_id:
-                params['chainid'] = self.chain_id
-            
-            response = requests.get(self.base_url, params=params, timeout=30)
-            time.sleep(RATE_LIMIT_DELAY)
-            
-            if response.status_code == 200:
-                data = response.json()
-                if data.get('status') == '1' and data.get('result'):
-                    result = data['result'][0] if isinstance(data['result'], list) else data['result']
-                    
-                    # Try to get decimals from multiple fields
-                    decimals = 18  # default
-                    if 'divisor' in result:
-                        decimals = int(result.get('divisor', 18))
-                    elif 'decimals' in result:
-                        decimals = int(result.get('decimals', 18))
-                    elif 'tokenDecimal' in result:
-                        decimals = int(result.get('tokenDecimal', 18))
-                    
-                    token_info = {
-                        'name': result.get('tokenName', 'Unknown'),
-                        'symbol': result.get('symbol', 'UNKNOWN'),
-                        'decimals': decimals
-                    }
-                    
-                    self.cache[token_address] = token_info
-                    return token_info
-        except Exception as e:
-            print(f"  Warning: Could not fetch info for {token_address}: {e}")
+                if response.status_code == 200:
+                    data = response.json()
+                    # BSCScan returns status '1' for success, '0' for failure
+                    # Etherscan V2 might return different format
+                    if data.get('status') == '1' and data.get('result'):
+                        result = data['result'][0] if isinstance(data['result'], list) else data['result']
+                        
+                        # Try to get decimals from multiple fields
+                        decimals = 18  # default
+                        if 'divisor' in result:
+                            decimals = int(result.get('divisor', 18))
+                        elif 'decimals' in result:
+                            decimals = int(result.get('decimals', 18))
+                        elif 'tokenDecimal' in result:
+                            decimals = int(result.get('tokenDecimal', 18))
+                        
+                        token_info = {
+                            'name': result.get('tokenName', 'Unknown'),
+                            'symbol': result.get('symbol', 'UNKNOWN'),
+                            'decimals': decimals
+                        }
+                        
+                        # Only cache and return if we got a valid symbol
+                        if token_info['symbol'] != 'UNKNOWN':
+                            self.cache[token_address] = token_info
+                            return token_info
+                    elif data.get('status') == '1' and isinstance(data.get('result'), list) and len(data['result']) > 0:
+                        # Handle case where result is a list
+                        result = data['result'][0]
+                        decimals = int(result.get('tokenDecimal', result.get('decimals', 18)))
+                        token_info = {
+                            'name': result.get('tokenName', 'Unknown'),
+                            'symbol': result.get('symbol', 'UNKNOWN'),
+                            'decimals': decimals
+                        }
+                        if token_info['symbol'] != 'UNKNOWN':
+                            self.cache[token_address] = token_info
+                            return token_info
+            except Exception as e:
+                print(f"  Warning: Could not fetch info from API for {token_address}: {e}")
+        
+        # For Binance, use ONLY GoldRush API for token metadata
+        if self.chain_name == 'binance':
+            goldrush_info = self._fetch_token_info_via_goldrush(token_address)
+            if goldrush_info and goldrush_info.get('symbol') and goldrush_info.get('symbol') != 'UNKNOWN':
+                self.cache[token_address] = goldrush_info
+                print(f"  ✓ Fetched via GoldRush: {goldrush_info['symbol']}")
+                return goldrush_info
+            # If GoldRush fails, return None (no fallback to RPC)
         
         # Return default if fetch fails
         default = {
@@ -101,6 +166,56 @@ class TokenMetadataFetcher:
         }
         self.cache[token_address] = default
         return default
+    
+    
+    def _fetch_token_info_via_goldrush(self, token_address: str) -> Optional[Dict]:
+        """Fetch token metadata via GoldRush/CovalentHQ API (for Binance Chain)"""
+        try:
+            from chains_config import get_chain_config
+            chain_config = get_chain_config(self.chain_name)
+            api_base = chain_config.get('api_base', '')
+            
+            # Check if we're using GoldRush API
+            if 'covalenthq.com' not in api_base.lower():
+                return None
+            
+            # GoldRush API: Use balances endpoint to get token metadata
+            # We query a dummy address (the token contract itself) to get its metadata
+            chain_id = 'bsc-mainnet'  # BSC on GoldRush
+            url = f"{api_base}/{chain_id}/address/{token_address}/balances_v2/"
+            
+            params = {
+                'key': self.api_key,
+                'nft': 'false'  # Only ERC-20 tokens
+            }
+            
+            response = requests.get(url, params=params, timeout=30)
+            time.sleep(RATE_LIMIT_DELAY)
+            
+            if response.status_code == 200:
+                data = response.json()
+                if data.get('data') and data.get('data').get('items'):
+                    items = data['data']['items']
+                    # Find the token with matching address
+                    for item in items:
+                        if item.get('contract_address', '').lower() == token_address.lower():
+                            contract_name = item.get('contract_name', '')
+                            contract_ticker = item.get('contract_ticker_symbol', '')
+                            contract_decimals = item.get('contract_decimals', 18)
+                            
+                            # GoldRush must have a ticker symbol to be valid
+                            if contract_ticker:
+                                return {
+                                    'name': contract_name or contract_ticker,
+                                    'symbol': contract_ticker,
+                                    'decimals': int(contract_decimals) if contract_decimals else 18
+                                }
+                            # If no ticker from GoldRush, return None (token not found in GoldRush)
+                            return None
+        except Exception as e:
+            pass  # Silently fail, return None
+        
+        return None
     
     def format_amount(self, amount_str: str, decimals: int) -> str:
         """Format token amount from wei to human-readable"""
@@ -125,14 +240,14 @@ def get_token_metadata_fetcher(chain_name: str, api_key: str):
         TokenMetadataFetcher instance
     """
     if is_evm_chain(chain_name):
-        return TokenMetadataFetcher(api_key)
+        return TokenMetadataFetcher(api_key, chain_name)
     elif chain_name == 'solana':
         return SolanaTokenMetadataFetcher(api_key)
     elif chain_name == 'sui':
         return SuiTokenMetadataFetcher(api_key)
     else:
         # Default to EVM fetcher
-        return TokenMetadataFetcher(api_key)
+        return TokenMetadataFetcher(api_key, chain_name)
 
 
 class SolanaTokenMetadataFetcher:

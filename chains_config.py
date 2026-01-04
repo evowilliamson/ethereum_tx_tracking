@@ -69,11 +69,24 @@ CHAINS = {
     },
     'binance': {
         'name': 'Binance Smart Chain',
-        'api_base': 'https://api.etherscan.io/v2/api',  # Use Etherscan API V2 (BSCScan recommends this)
-        'chain_id': '56',
+        # Using direct BSC RPC calls for complete historical data
+        # Alternative options (commented out):
+        # Option 1: NodeReal/MegaNode (free tier, but limited historical data ~2 days)
+        # 'api_base': 'https://bsc-mainnet.nodereal.io/v1',  # NodeReal/MegaNode JSON-RPC endpoint
+        # 'api_type': 'nodereal',  # Mark as NodeReal to use JSON-RPC instead of REST
+        # Option 2: BSCScan API (deprecated Dec 2025, requires paid Etherscan plan)
+        # 'api_base': 'https://api.bscscan.com/api',  # BSCScan REST API (deprecated)
+        # 'api_type': 'etherscan',  # Use Etherscan-compatible REST API
+        # Option 3: Etherscan API V2 with chainid=56 (requires paid plan)
+        # 'api_base': 'https://api.etherscan.io/v2/api',  # Etherscan API V2
+        # 'chain_id': '56',  # BSC chain ID for Etherscan V2
+        # 'api_type': 'etherscan',  # Use Etherscan-compatible REST API
+        'api_base': 'https://api.covalenthq.com/v1',  # GoldRush/CovalentHQ API
+        'chain_id': '56',  # BSC chain ID
         'native_token': 'BNB',
         'weth_address': '0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c',  # WBNB
         'explorer_url': 'https://bscscan.com',
+        'api_type': 'goldrush',  # Use GoldRush/CovalentHQ API
     },
     'linea': {
         'name': 'Linea',

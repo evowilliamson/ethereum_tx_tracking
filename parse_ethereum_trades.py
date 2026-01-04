@@ -42,10 +42,13 @@ class EthereumTradeParser(BlockchainTradeParser):
     def _build_lookups(self):
         """Build lookup structures for efficient processing"""
         # Group ERC-20 transfers by transaction hash
+        # Filter out entries without contractAddress (these are BNB transfers, not ERC-20)
         self.erc20_by_hash = defaultdict(list)
         for tx in self.data.get('erc20_token_transfers', []):
-            tx_hash = tx.get('hash', '').lower()
-            self.erc20_by_hash[tx_hash].append(tx)
+            # Only include actual ERC-20 transfers (must have contractAddress)
+            if tx.get('contractAddress'):
+                tx_hash = tx.get('hash', '').lower()
+                self.erc20_by_hash[tx_hash].append(tx)
         
         # Index normal transactions by hash
         self.normal_txs_by_hash = {}
@@ -143,10 +146,30 @@ class EthereumTradeParser(BlockchainTradeParser):
         """Parse swap involving ETH (native token)"""
         our_addr = self.address.lower()
         tx_hash = tx.get('hash', '').lower()
+        tx_from = tx.get('from', '').lower()
         
         # Check if transaction involves ETH (value sent)
+        # IMPORTANT: Only count as swap if WE sent the ETH (tx.from == our_address)
+        # If we only received ETH, it's not a swap - it's an airdrop/reward/refund
         eth_value = int(tx.get('value', '0'))
-        is_eth_in = eth_value > 0
+        is_eth_in = eth_value > 0 and tx_from == our_addr  # Must be from us
+        
+        # Filter out simple BNB transfers (not swaps)
+        # These are typically gas refunds, dust, or simple transfers
+        tx_from = tx.get('from', '').lower()
+        tx_to = tx.get('to', '').lower()
+        input_data = tx.get('input', '0x')
+        has_swap_function = len(input_data) >= 10 and input_data[:10].lower() in SWAP_FUNCTION_SIGNATURES
+        is_dex_router = tx_to in self.router_to_dex
+        
+        # If this is a simple BNB transfer TO our address (we're receiving, not sending)
+        # and it's a small amount without swap function or DEX router, it's likely not a swap
+        if tx_to == our_addr and tx_from != our_addr:
+            # We're receiving BNB - check if it's a swap or just a transfer
+            if eth_value > 0 and eth_value < 100000000000000000:  # < 0.1 BNB
+                if not has_swap_function and not is_dex_router and len(erc20_transfers) == 0:
+                    # Small BNB transfer to us without swap function or token transfers - likely gas refund or dust
+                    return None
         
         # Aggregate ERC-20 transfers (token out when ETH in)
         tokens_received = {}  # token -> total_amount
@@ -161,6 +184,13 @@ class EthereumTradeParser(BlockchainTradeParser):
         if is_eth_in and tokens_received:
             token_out = max(tokens_received.items(), key=lambda x: x[1])[0]
             amount_out = tokens_received[token_out]
+            
+            # Filter out very small BNB swaps that are likely fees/dust
+            # If BNB amount is very small (< 0.1 BNB), it's likely a fee payment, not a real swap
+            if eth_value < 100000000000000000:  # < 0.1 BNB
+                # Very small amount - likely fee or dust, not a real swap
+                return None
+            
             return {
                 'tx_hash': tx.get('hash', ''),
                 'block_number': int(tx.get('blockNumber', 0)),
@@ -257,6 +287,31 @@ class EthereumTradeParser(BlockchainTradeParser):
         erc20_transfers = self.erc20_by_hash.get(tx_hash, [])
         our_address_lower = self.address.lower()
         
+        # Filter out simple BNB transfers (gas fees, dust, refunds)
+        tx_from = tx.get('from', '').lower()
+        tx_to = tx.get('to', '').lower()
+        tx_value = int(tx.get('value', '0'))
+        input_data = tx.get('input', '0x')
+        has_input_data = input_data != '0x' and len(input_data) > 10
+        has_swap_function = len(input_data) >= 10 and input_data[:10].lower() in SWAP_FUNCTION_SIGNATURES
+        is_dex_router = tx_to in self.router_to_dex
+        
+        # If this is a simple BNB transfer TO our address (we're receiving, not sending)
+        # with no contract interaction, no swap function, and small amount, it's not a swap
+        if tx_to == our_address_lower and tx_from != our_address_lower:
+            # We're receiving BNB
+            if tx_value > 0:
+                # Check if it's a small amount without swap indicators
+                if tx_value < 100000000000000000:  # < 0.1 BNB
+                    if not has_swap_function and not is_dex_router and len(erc20_transfers) == 0:
+                        # Small BNB transfer to us without swap function or token transfers - likely gas refund or dust
+                        return None
+                # Also check if it's just a simple transfer (no input data, standard gas)
+                gas_used = int(tx.get('gasUsed', '0'))
+                if gas_used == 21000 and not has_input_data and len(erc20_transfers) == 0:
+                    # Standard gas for simple transfer, no input data, no token transfers - not a swap
+                    return None
+        
         # Find all transfers involving our address
         our_transfers = []
         for transfer in erc20_transfers:
@@ -265,8 +320,13 @@ class EthereumTradeParser(BlockchainTradeParser):
             if from_addr == our_address_lower or to_addr == our_address_lower:
                 our_transfers.append(transfer)
         
+        # Enhanced: Also check if transaction is to a contract (likely DEX/protocol)
+        # and has token transfers - this indicates a swap even with single transfer
+        is_contract_interaction = tx_to and tx_to != our_address_lower and tx_to != '0x'
+        
         # If we have 2+ transfers involving us, it's likely a swap
-        if len(our_transfers) >= 2:
+        # OR if we have 1 transfer + contract interaction with input data (swap function call)
+        if len(our_transfers) >= 2 or (len(our_transfers) >= 1 and is_contract_interaction and has_input_data):
             # Aggregate amounts by token (sum all transfers of same token)
             # In swaps, there can be multiple transfers of the same token
             tokens_sent = {}  # token_address -> total_amount
@@ -292,8 +352,52 @@ class EthereumTradeParser(BlockchainTradeParser):
             amount_out = tokens_received.get(token_out, 0) if token_out else 0
             
             # Only return if it's a real swap: different tokens, both amounts > 0
-            # This filters out simple transfers (same token or one-way transfers)
+            # AND we must have sent something (tokens_sent must not be empty)
+            # This filters out airdrops, rewards, refunds where we only receive tokens
+            is_swap = False
             if token_in and token_out and token_in != token_out and amount_in > 0 and amount_out > 0:
+                # Must have sent something (tokens_sent not empty) to be a swap
+                # If we only received tokens without sending anything, it's not a swap
+                if tokens_sent and len(tokens_sent) > 0:
+                    is_swap = True
+            elif len(our_transfers) >= 1 and is_contract_interaction and has_input_data:
+                # Single transfer to contract with function call - likely a swap
+                # We might only see one side if the other token is native (BNB) or not captured
+                # Check if input data looks like a swap function
+                input_data = tx.get('input', '0x')
+                func_sig = input_data[:10].lower() if len(input_data) >= 10 else ''
+                if func_sig in SWAP_FUNCTION_SIGNATURES:
+                    # It's a swap function call - treat as swap even if we only see one token
+                    if token_in and amount_in > 0:
+                        # We sent a token, assume we received something (BNB or another token)
+                        token_out = ETH_ADDRESS  # Assume BNB/ETH received
+                        amount_out = tx.get('value', '0')  # Use transaction value as amount out
+                        if amount_out == '0' or int(amount_out) == 0:
+                            # No BNB value, might have received another token we didn't capture
+                            # Still count it as a swap since it's a swap function call
+                            amount_out = '1'  # Placeholder, will be enriched later
+                        is_swap = True
+                    elif token_out and amount_out > 0:
+                        # We received a token, assume we sent something
+                        token_in = ETH_ADDRESS  # Assume BNB/ETH sent
+                        amount_in = tx.get('value', '0')
+                        if amount_in == '0' or int(amount_in) == 0:
+                            amount_in = '1'  # Placeholder
+                        is_swap = True
+            
+            if is_swap:
+                # Filter out very small swaps that are likely fees/dust
+                # If amount is very small (< 0.01 BNB equivalent) and token_out is empty/zero,
+                # it's likely a fee payment, not a real swap
+                amount_in_wei = int(amount_in) if isinstance(amount_in, str) else amount_in
+                amount_out_wei = int(amount_out) if isinstance(amount_out, str) else amount_out
+                
+                # If token_in is BNB and amount is very small, likely a fee
+                if token_in == ETH_ADDRESS.lower() and amount_in_wei < 10000000000000000:  # < 0.01 BNB
+                    if not token_out or token_out == '' or token_out == ETH_ADDRESS.lower():
+                        # Very small BNB amount with no clear token_out - likely fee
+                        return None
+                
                 # Don't filter protocol interactions - Koinly counts them as trades
                 # (e.g., USDC -> SYRUPUSDC, AETHUSDC -> USDC are counted as trades by Koinly)
                 # These are token exchanges even if they're protocol deposits/withdrawals
@@ -309,6 +413,37 @@ class EthereumTradeParser(BlockchainTradeParser):
                     'amount_out': str(amount_out),
                     'type': 'swap'
                 }
+        
+        # Filter out simple BNB transfers (not swaps)
+        # These are typically gas refunds, dust, or simple transfers
+        tx_value = int(tx.get('value', '0'))
+        gas_used = int(tx.get('gasUsed', '0'))
+        gas_price = int(tx.get('gasPrice', '0'))
+        
+        # Calculate gas fee
+        gas_fee = gas_used * gas_price if gas_used > 0 and gas_price > 0 else 0
+        
+        # If this is a simple BNB transfer (no ERC-20 transfers, no contract interaction, small amount)
+        # and the amount is similar to gas fees or very small, it's likely not a swap
+        if len(erc20_transfers) == 0:
+            # Simple BNB transfer - check if it's a swap or just a transfer
+            tx_to = tx.get('to', '').lower()
+            input_data = tx.get('input', '0x')
+            has_swap_function = len(input_data) >= 10 and input_data[:10].lower() in SWAP_FUNCTION_SIGNATURES
+            is_dex_router = tx_to in self.router_to_dex
+            
+            # If it's a very small amount (< 0.1 BNB) and not a DEX interaction, likely not a swap
+            if tx_value > 0 and tx_value < 100000000000000000:  # < 0.1 BNB
+                if not has_swap_function and not is_dex_router:
+                    # Small BNB transfer without swap function - likely gas refund or dust
+                    return None
+        
+        # Additional filter: If we have a very small BNB amount and no clear swap indicators,
+        # it's likely a fee payment, not a swap
+        if tx_value > 0 and tx_value < 100000000000000000:  # < 0.1 BNB
+            if not has_swap_function and not is_dex_router and len(erc20_transfers) == 0:
+                # Very small BNB amount without swap indicators - likely fee
+                return None
         
         # Check for ETH swaps
         if len(erc20_transfers) < 2:

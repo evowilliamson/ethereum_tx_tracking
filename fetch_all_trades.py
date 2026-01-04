@@ -71,18 +71,60 @@ def export_to_csv(enriched_json_file: str, output_csv: str, blockchain: str, add
         
         total_rows = 0
         trades_with_na = 0
+        filtered_fees = 0
         
         for trade in trades:
-            # Get token symbols
+            # Get token symbols and amounts first
             token_in_meta = trade.get('token_in_metadata', {})
             token_out_meta = trade.get('token_out_metadata', {})
             
-            source_currency = token_in_meta.get('symbol', 'UNKNOWN')
-            target_currency = token_out_meta.get('symbol', 'UNKNOWN')
+            token_in_symbol = token_in_meta.get('symbol', 'UNKNOWN')
+            token_out_symbol = token_out_meta.get('symbol', 'UNKNOWN')
             
-            # Get amounts
-            source_amount = float(trade.get('amount_in_formatted', '0'))
-            target_amount = float(trade.get('amount_out_formatted', '0'))
+            amount_in = float(trade.get('amount_in_formatted', '0'))
+            amount_out = float(trade.get('amount_out_formatted', '0'))
+            
+            # Filter out small swaps with UNKNOWN tokens (likely fees)
+            has_unknown = token_in_symbol == 'UNKNOWN' or token_out_symbol == 'UNKNOWN'
+            
+            if has_unknown:
+                # Get USD value to check if it's a small fee
+                source_price = trade.get('source_price_usd', 0)
+                target_price = trade.get('target_price_usd', 0)
+                
+                # Calculate USD value
+                if source_price:
+                    usd_value = source_price * amount_in
+                elif target_price:
+                    usd_value = target_price * amount_out
+                else:
+                    usd_value = 0
+                
+                # Filter out small swaps with UNKNOWN tokens (likely fees)
+                # If USD value is < $10, it's likely a fee payment
+                if usd_value > 0 and usd_value < 10:
+                    filtered_fees += 1
+                    continue  # Skip this trade (likely a fee)
+                
+                # Also check BNB/ETH amounts directly
+                if token_in_symbol == 'BNB' or token_in_symbol == 'ETH':
+                    if amount_in < 0.1:  # < 0.1 BNB
+                        filtered_fees += 1
+                        continue  # Skip this trade (likely a fee)
+                elif token_out_symbol == 'BNB' or token_out_symbol == 'ETH':
+                    if amount_out < 0.1:  # < 0.1 BNB
+                        filtered_fees += 1
+                        continue  # Skip this trade (likely a fee)
+                # For other tokens, if amount is very small (< 10 units), likely a fee
+                elif amount_in < 10 and amount_out < 10:
+                    filtered_fees += 1
+                    continue  # Skip this trade (likely a fee)
+            
+            # Use the extracted values
+            source_currency = token_in_symbol
+            target_currency = token_out_symbol
+            source_amount = amount_in
+            target_amount = amount_out
             
             # Get prices
             source_price = trade.get('source_price_usd')
@@ -133,8 +175,10 @@ def export_to_csv(enriched_json_file: str, output_csv: str, blockchain: str, add
             ])
             total_rows += 1
     
-    exported_swaps = len(trades)
+    exported_swaps = len(trades) - filtered_fees
     print(f"✓ Exported {exported_swaps} swaps as {total_rows} transactions")
+    if filtered_fees > 0:
+        print(f"  ⚠ Filtered out {filtered_fees} small fee payments (UNKNOWN tokens with small amounts)")
     if trades_with_na > 0:
         print(f"  ⚠ {trades_with_na} trades have N/A values (missing prices)")
 

@@ -4,6 +4,12 @@ Used as fallback when Etherscan API fails
 """
 
 KNOWN_TOKENS = {
+    # Binance Smart Chain tokens
+    "0xe846d164b88ed2e1209609fea3cf7a3d89d70d2d": {
+        "name": "Hawk",
+        "symbol": "Hawk",
+        "decimals": 18
+    },
     "0x00000000efe302beaa2b3e6e1b18d08d69a9012a": {
         "name": "AUSD",
         "symbol": "AUSD",
