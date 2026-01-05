@@ -941,6 +941,11 @@ def main():
     # Optional: API key from environment variable
     api_key = os.getenv('CRYPTOCOMPARE_API_KEY')
     
+    # Debug: Print arguments for troubleshooting
+    if len(sys.argv) > 1:
+        print(f"[DEBUG] sys.argv: {sys.argv}", flush=True)
+        print(f"[DEBUG] sys.argv[1].lower(): '{sys.argv[1].lower()}'", flush=True)
+    
     # Check for special "top1000" command
     if len(sys.argv) >= 2 and sys.argv[1].lower() == 'top1000':
         print("="*80, flush=True)
@@ -949,9 +954,24 @@ def main():
         download_top_1000_all_data(api_key)
         return
     
+    # Check for special "resume" command (case-insensitive)
+    if len(sys.argv) >= 2:
+        first_arg = sys.argv[1].lower().strip()
+        if first_arg == 'resume':
+            dry_run = '--dry-run' in sys.argv or '-d' in sys.argv
+            exclude_coins = ['MON']  # Default exclude list
+            # Check for custom exclude coins
+            if '--exclude' in sys.argv:
+                idx = sys.argv.index('--exclude')
+                if idx + 1 < len(sys.argv):
+                    exclude_coins = [coin.strip().upper() for coin in sys.argv[idx + 1].split(',')]
+            download_top_1000_all_data_resume(dry_run=dry_run, exclude_coins=exclude_coins, api_key=api_key)
+            return
+    
     if len(sys.argv) < 2:
         print("Usage: python3 download_cryptocompare_hourly.py <SYMBOL> [CURRENCY] [START_DATE] [END_DATE]", flush=True)
         print("   OR: python3 download_cryptocompare_hourly.py top1000", flush=True)
+        print("   OR: python3 download_cryptocompare_hourly.py resume [--dry-run] [--exclude COIN1,COIN2]", flush=True)
         print("\nExample (all data for single coin):", flush=True)
         print("  python3 download_cryptocompare_hourly.py BTC", flush=True)
         print("  python3 download_cryptocompare_hourly.py BTC USD", flush=True)
