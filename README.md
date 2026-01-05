@@ -52,50 +52,7 @@ The system uses multiple detection strategies, so even if a DEX is not explicitl
 
 The system is built using an abstraction layer that supports multiple blockchain types:
 
-```
-┌─────────────────────────────────────────────────────────┐
-│  blockchain_settings.py                                  │
-│  (API keys, wallet addresses, RPC endpoints)            │
-└─────────────────────────────────────────────────────────┘
-                        ↓
-┌─────────────────────────────────────────────────────────┐
-│  fetch_all_chains_trades.py  (Multi-chain orchestrator) │
-│  OR                                                      │
-│  fetch_all_trades.py  (Single-chain processor)          │
-└─────────────────────────────────────────────────────────┘
-         ↓                           ↓
-┌──────────────────┐      ┌──────────────────────────┐
-│ blockchain_      │      │ blockchain_              │
-│ interface.py     │──────│ interface.py             │
-│ (Abstract base)  │      │ (Factory functions)      │
-└──────────────────┘      └──────────────────────────┘
-         ↓                           ↓
-┌──────────────────┐      ┌──────────────────────────┐
-│ Chain-specific   │      │ Chain-specific           │
-│ Fetcher          │      │ Parser                   │
-│ - EVM:           │      │ - EVM:                   │
-│   Ethereum       │      │   EthereumTradeParser    │
-│   Transaction    │      │ - Solana:                │
-│   Fetcher        │      │   SolanaTradeParser      │
-│ - Solana:        │      │ - Sui:                   │
-│   Solana         │      │   SuiTradeParser         │
-│   Transaction    │      │                          │
-│   Fetcher        │      │                          │
-│ - Sui:           │      │                          │
-│   Sui            │      │                          │
-│   Transaction    │      │                          │
-│   Fetcher        │      │                          │
-└──────────────────┘      └──────────────────────────┘
-         ↓                           ↓
-┌─────────────────────────────────────────────────────────┐
-│  enrich_trades_with_tokens.py  (Token metadata)         │
-└─────────────────────────────────────────────────────────┘
-         ↓
-┌─────────────────────────────────────────────────────────┐
-│  Output: JSON files with trade data                     │
-│  Optional: CSV export                                    │
-└─────────────────────────────────────────────────────────┘
-```
+![Architecture Diagram](docs/architecture_diagram.png)
 
 ### Core Components
 
