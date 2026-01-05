@@ -12,6 +12,16 @@ from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 from collections import defaultdict
 
+# CoinGecko integration
+from coingecko import (
+    refresh_symbol_mapping,
+    load_symbol_mapping,
+    get_historical_price,
+    get_cache_key,
+    DEFAULT_MAPPING_FILE,
+    DEFAULT_CACHE_FILE
+)
+
 # Stablecoins - extended list for cache window optimization and fallback pricing
 # We get actual prices from CoinGecko, but use this list to:
 # 1. Apply longer cache window (5 min vs 1 min) for stablecoins
@@ -61,11 +71,11 @@ STABLECOINS = {
 class PriceFeedBuilder:
     """Builds a price feed from trades and external APIs"""
     
-    CACHE_FILE = 'coingecko_cache.json'
-    MAPPING_FILE = 'coingecko_symbol_mapping.json'
+    CACHE_FILE = DEFAULT_CACHE_FILE
+    MAPPING_FILE = DEFAULT_MAPPING_FILE
     
     def __init__(self):
-        self.symbol_mapping = self._refresh_symbol_mapping()  # {symbol: coin_id} - refreshed on every flow start
+        self.symbol_mapping = refresh_symbol_mapping(self.MAPPING_FILE)  # {symbol: coin_id} - refreshed on every flow start
         self.price_cache = self._load_price_cache()  # {symbol: {'price': float, 'timestamp': int}}
         
     def is_stablecoin(self, symbol: str) -> bool:
@@ -92,99 +102,7 @@ class PriceFeedBuilder:
     
     def _get_cache_key(self, symbol: str, timestamp: int) -> str:
         """Generate cache key for historical price: symbol_date"""
-        date_str = datetime.fromtimestamp(timestamp).strftime('%Y-%m-%d')
-        return f"{symbol.upper()}_{date_str}"
-    
-    def _refresh_symbol_mapping(self) -> Dict[str, str]:
-        """
-        Refresh symbol → CoinGecko ID mapping on every flow start
-        Queries top 200 for canonical IDs, then /coins/list for all tokens
-        Returns: {symbol: coin_id} mapping
-        """
-        print("Refreshing CoinGecko symbol mapping...")
-        
-        # Step 1: Get canonical IDs from top 200 (for conflict resolution)
-        canonical_ids = {}
-        try:
-            url = "https://api.coingecko.com/api/v3/coins/markets"
-            params = {'vs_currency': 'usd', 'per_page': 200, 'order': 'market_cap_desc', 'page': 1}
-            time.sleep(0.5)
-            response = requests.get(url, params=params, timeout=30)
-            
-            if response.status_code == 200:
-                top200 = response.json()
-                for coin in top200:
-                    symbol = coin.get('symbol', '').upper()
-                    coin_id = coin.get('id', '')
-                    # First entry with this symbol = canonical (highest market cap)
-                    if symbol and symbol not in canonical_ids:
-                        canonical_ids[symbol] = coin_id
-                print(f"  ✓ Got {len(canonical_ids)} canonical IDs from top 200")
-        except Exception as e:
-            print(f"  ⚠ Error getting top 200: {e}")
-        
-        # Step 2: Get all coins from /coins/list
-        symbol_mapping = {}
-        try:
-            url = "https://api.coingecko.com/api/v3/coins/list"
-            time.sleep(0.5)
-            response = requests.get(url, timeout=60)
-            
-            if response.status_code == 200:
-                all_coins = response.json()
-                print(f"  ✓ Got {len(all_coins)} coins from /coins/list")
-                
-                # Step 3: Build mapping (use canonical when available, otherwise first or heuristic)
-                for coin in all_coins:
-                    symbol = coin.get('symbol', '').upper()
-                    coin_id = coin.get('id', '')
-                    
-                    if symbol and coin_id:
-                        if symbol in canonical_ids:
-                            # Use canonical ID (from top 200, highest market cap)
-                            symbol_mapping[symbol] = canonical_ids[symbol]
-                        elif symbol not in symbol_mapping:
-                            # First time seeing this symbol
-                            symbol_mapping[symbol] = coin_id
-                        else:
-                            # Conflict - use heuristic: prefer non-bridged, shorter ID
-                            current_id = symbol_mapping[symbol]
-                            if ('bridged' not in coin_id.lower() and 'peg' not in coin_id.lower() and 
-                                len(coin_id) < len(current_id)):
-                                symbol_mapping[symbol] = coin_id
-                
-                print(f"  ✓ Built mapping with {len(symbol_mapping)} unique symbols")
-                
-                # Save to file
-                try:
-                    with open(self.MAPPING_FILE, 'w') as f:
-                        json.dump(symbol_mapping, f, indent=2)
-                    print(f"  ✓ Saved to {self.MAPPING_FILE}")
-                except Exception as e:
-                    print(f"  ⚠ Could not save mapping file: {e}")
-                
-            else:
-                print(f"  ⚠ Error getting /coins/list: {response.status_code}")
-                # Try to load from file if exists
-                symbol_mapping = self._load_symbol_mapping()
-        except Exception as e:
-            print(f"  ⚠ Error refreshing mapping: {e}")
-            # Try to load from file if exists
-            symbol_mapping = self._load_symbol_mapping()
-        
-        return symbol_mapping
-    
-    def _load_symbol_mapping(self) -> Dict[str, str]:
-        """Load symbol mapping from file if refresh fails"""
-        if os.path.exists(self.MAPPING_FILE):
-            try:
-                with open(self.MAPPING_FILE, 'r') as f:
-                    mapping = json.load(f)
-                    print(f"  ✓ Loaded {len(mapping)} mappings from file")
-                    return mapping
-            except Exception:
-                pass
-        return {}
+        return get_cache_key(symbol, timestamp)
     
     def get_coingecko_price(self, symbol: str, timestamp: int) -> Optional[float]:
         """Get historical price from CoinGecko with file-based caching by date"""
@@ -198,7 +116,7 @@ class PriceFeedBuilder:
                 return float(cached_price)
         
         # Cache miss, query CoinGecko
-        price = self._query_coingecko(symbol_upper, timestamp)
+        price = get_historical_price(symbol_upper, timestamp, self.symbol_mapping)
         
         # Update cache if we got a price (cache by date, not timestamp)
         if price is not None:
@@ -206,38 +124,6 @@ class PriceFeedBuilder:
             self._save_price_cache()
         
         return price
-    
-    def _query_coingecko(self, symbol: str, timestamp: int) -> Optional[float]:
-        """Query CoinGecko API for historical price"""
-        # Get coin ID from symbol mapping (refreshed on every flow start)
-        coingecko_id = self.symbol_mapping.get(symbol.upper())
-        if not coingecko_id:
-            return None
-        
-        # CoinGecko free API allows historical price queries
-        try:
-            date_str = datetime.fromtimestamp(timestamp).strftime('%d-%m-%Y')
-            url = f"https://api.coingecko.com/api/v3/coins/{coingecko_id}/history"
-            params = {'date': date_str}
-            
-            time.sleep(0.5)  # Rate limit for free API
-            response = requests.get(url, params=params, timeout=10)
-            
-            if response.status_code == 200:
-                data = response.json()
-                if 'market_data' in data and 'current_price' in data['market_data']:
-                    return float(data['market_data']['current_price']['usd'])
-            elif response.status_code == 429:
-                # Rate limited - can't use cache from different date (would be wrong price)
-                print(f"  ⚠ Rate limited for {symbol} on {date_str} - will retry or mark unavailable")
-                # Don't use cached price from different date - better to mark as unavailable
-                # than use wrong price
-            else:
-                print(f"  ⚠ CoinGecko API error for {symbol}: {response.status_code}")
-        except Exception as e:
-            print(f"  ⚠ Exception querying CoinGecko for {symbol}: {e}")
-        
-        return None
     
     def extract_underlying_asset(self, protocol_token: str) -> Optional[str]:
         """

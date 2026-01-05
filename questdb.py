@@ -229,7 +229,7 @@ def insert_batch_to_questdb(conn, symbol: str, new_rows: list):
             """
             execute_values(cur, insert_sql, values)
             # No commit needed with autocommit=True
-            print(f"  ✓ Inserted {len(values)} new rows to QuestDB", flush=True)
+            print(f"  ✓ Inserted {len(values)} new rows to QuestDB for {symbol}", flush=True)
     
     except Exception as e:
         print(f"  ✗ Error inserting batch to QuestDB: {type(e).__name__}: {e}", flush=True)
