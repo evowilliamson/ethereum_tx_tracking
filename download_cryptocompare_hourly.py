@@ -21,6 +21,9 @@ from questdb import (
     insert_batch_to_questdb
 )
 
+# CoinGecko integration
+from coingecko import get_top_1000_by_marketcap
+
 
 def load_existing_csv(output_file: str, symbol: str) -> dict:
     """
@@ -133,7 +136,7 @@ def fetch_all_hourly_data(symbol: str, currency: str = 'USD', api_key: str = Non
         Dictionary mapping timestamp -> {'timestamp': ts, 'datetime': dt, 'open': price}
     """
     base_url = 'https://min-api.cryptocompare.com/data/v2/histohour'
-    limit = 2000  # Maximum data points per request
+    limit = 1999  # Request 1999 hours to get exactly 2000 rows per batch (API returns limit+1 points with inclusive boundaries)
     
     # Determine starting timestamp
     if end_ts is not None:
@@ -210,7 +213,7 @@ def fetch_all_hourly_data(symbol: str, currency: str = 'USD', api_key: str = Non
                 break
             
             batch = data['Data']['Data']
-            print(f"  → Got {len(batch)} data points in this batch", flush=True)
+            print(f"  → Got {len(batch)} data points in this batch for {symbol}", flush=True)
             
             if not batch:
                 print(f"  ✓ No more data available (empty batch)", flush=True)
@@ -238,10 +241,20 @@ def fetch_all_hourly_data(symbol: str, currency: str = 'USD', api_key: str = Non
                 print(f"  ✓ No data points in the specified range", flush=True)
                 break
             
-            # Prepare batch data
+            # Prepare batch data (filter out exactly 0.0 prices - indicates pre-launch period)
             batch_rows = []
             batch_timestamps = []
+            filtered_zero_count = 0
+            
             for point in batch:
+                price = point['open']
+                
+                # Skip exactly 0.0 prices (coin didn't exist yet)
+                # Keep all non-zero prices, no matter how small (e.g., 0.0000000000555 is valid)
+                if price == 0.0:
+                    filtered_zero_count += 1
+                    continue
+                
                 timestamp = point['time']
                 # Format datetime as YYYY/MM/DD hh:00:00
                 dt = datetime.fromtimestamp(timestamp)
@@ -251,9 +264,19 @@ def fetch_all_hourly_data(symbol: str, currency: str = 'USD', api_key: str = Non
                     'coin': symbol.upper(),
                     'timestamp': timestamp,
                     'datetime': datetime_str,
-                    'open': str(point['open'])
+                    'open': str(price)
                 })
                 batch_timestamps.append(timestamp)
+            
+            # Early stop: If all prices in batch were 0.0, we've hit the pre-launch period
+            # CryptoCompare has no data for this coin before this point
+            if len(batch_rows) == 0:
+                print(f"  ✓ All prices in batch were 0.0 for {symbol} (pre-launch period)", flush=True)
+                print(f"  ✓ Reached end of available data for {symbol} - stopping early", flush=True)
+                break
+            
+            if filtered_zero_count > 0:
+                print(f"  → Filtered out {filtered_zero_count} rows with 0.0 prices for {symbol} (pre-launch data)", flush=True)
             
             # Check which rows already exist in QuestDB (batch check)
             existing_keys = set()
@@ -286,25 +309,31 @@ def fetch_all_hourly_data(symbol: str, currency: str = 'USD', api_key: str = Non
                 insert_batch_to_questdb(questdb_conn, symbol, new_rows_for_db)
             
             if updated_count > 0:
-                print(f"  → Updated {updated_count} existing rows in data_dict, added {new_count} new rows", flush=True)
+                print(f"  → Updated {updated_count} existing rows in data_dict, added {new_count} new rows for {symbol}", flush=True)
             else:
-                print(f"  → Added {new_count} new rows to data dictionary", flush=True)
+                print(f"  → Added {new_count} new rows to data dictionary for {symbol}", flush=True)
             
             request_count += 1
             
-            # Get earliest and latest timestamps from this batch
-            earliest_time = batch[0]['time']
-            latest_time = batch[-1]['time']
-            earliest_date = datetime.fromtimestamp(earliest_time).strftime('%Y-%m-%d %H:%M:%S')
-            latest_date = datetime.fromtimestamp(latest_time).strftime('%Y-%m-%d %H:%M:%S')
-            
-            print(f"  ✓ Request {request_count} successful!", flush=True)
-            print(f"     Batch range: {earliest_date} to {latest_date}", flush=True)
-            print(f"     Total data points in dictionary: {len(data_dict)}", flush=True)
-            
-            # Set toTs to one second before the earliest timestamp for next request
-            to_ts = earliest_time - 1
-            print(f"     Next request will go back to: {datetime.fromtimestamp(to_ts).strftime('%Y-%m-%d %H:%M:%S')}", flush=True)
+            # Get earliest and latest timestamps from filtered batch_rows (not original batch)
+            # Note: batch_rows only contains valid (non-zero) prices after filtering
+            if batch_rows:
+                earliest_time = batch_rows[0]['timestamp']
+                latest_time = batch_rows[-1]['timestamp']
+                earliest_date = datetime.fromtimestamp(earliest_time).strftime('%Y-%m-%d %H:%M:%S')
+                latest_date = datetime.fromtimestamp(latest_time).strftime('%Y-%m-%d %H:%M:%S')
+                
+                print(f"  ✓ Request {request_count} successful for {symbol}!", flush=True)
+                print(f"     Batch range: {earliest_date} to {latest_date}", flush=True)
+                print(f"     Total data points in dictionary for {symbol}: {len(data_dict)}", flush=True)
+                
+                # Set toTs to one hour before the earliest timestamp for next request
+                # This ensures no overlap (API returns limit+1 points with inclusive boundaries)
+                to_ts = earliest_time - 3600
+                print(f"     Next request will go back to: {datetime.fromtimestamp(to_ts).strftime('%Y-%m-%d %H:%M:%S')}", flush=True)
+            else:
+                # This shouldn't happen due to early stop check above, but handle it just in case
+                print(f"  ✓ Request {request_count} successful (all prices filtered out)", flush=True)
             
             # Rate limiting - be nice to the API
             print(f"  → Waiting 0.2 seconds before next request...", flush=True)
@@ -402,16 +431,574 @@ def save_to_csv(data: list, output_file: str, symbol: str):
         raise
 
 
+
+
+def download_top_1000_all_data(api_key: str = None):
+    """
+    Download all hourly historical data for top 1000 cryptocurrencies by market cap.
+    
+    This function:
+    1. Gets top 1000 coins by market cap
+    2. Iterates through each coin
+    3. Downloads all available hourly data (no date ranges)
+    4. Saves to CSV and QuestDB
+    5. Generates a final report with stats per coin
+    
+    Args:
+        api_key: Optional API key for CryptoCompare (helps with rate limits)
+    """
+    # Get top 1000 coins
+    coins = get_top_1000_by_marketcap(api_key)
+    
+    if not coins:
+        print("Error: No coins retrieved from API", flush=True)
+        return
+    
+    print(f"\n{'='*60}", flush=True)
+    print(f"Starting download of all hourly data for {len(coins)} coins", flush=True)
+    print(f"{'='*60}", flush=True)
+    
+    # Setup output directory
+    home_dir = Path.home()
+    base_data_dir = home_dir / ".dex_trades_extractor" / ".files" / "price" / "cryptocompare"
+    base_data_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Setup QuestDB connection (reused for all coins)
+    questdb_conn = get_questdb_connection()
+    if questdb_conn:
+        create_questdb_table(questdb_conn)
+        print("  ✓ Connected to QuestDB", flush=True)
+    else:
+        print("  ⚠ QuestDB not available, using CSV only", flush=True)
+    
+    # Tracking structures for final report
+    coin_stats = {}  # symbol -> {'rows': int, 'error': str or None, 'success': bool}
+    errors = []  # List of (symbol, error_message) tuples
+    
+    currency = 'USD'
+    total_start_time = time.time()
+    
+    # Process each coin
+    for idx, symbol in enumerate(coins, 1):
+        print(f"\n{'='*60}", flush=True)
+        print(f"Processing {idx}/{len(coins)}: {symbol}", flush=True)
+        print(f"{'='*60}", flush=True)
+        
+        coin_start_time = time.time()
+        rows_inserted = 0
+        error_message = None
+        
+        try:
+            # Set output file path
+            output_file = str(base_data_dir / f"{symbol.lower()}.csv")
+            
+            # Load existing data from CSV and QuestDB
+            data_dict = {}
+            
+            # Load from CSV
+            csv_data = load_existing_csv(output_file, symbol)
+            data_dict.update(csv_data)
+            
+            # Load from QuestDB (if available)
+            if questdb_conn:
+                questdb_data = load_existing_questdb(questdb_conn, symbol)
+                data_dict.update(questdb_data)
+            
+            # Fetch all data (no date ranges - get ALL historical data)
+            data_dict = fetch_all_hourly_data(
+                symbol=symbol,
+                currency=currency,
+                api_key=api_key,
+                output_file=output_file,
+                start_ts=None,  # No start date
+                end_ts=None,    # No end date
+                data_dict=data_dict,
+                questdb_conn=questdb_conn
+            )
+            
+            if data_dict:
+                # Filter for this symbol
+                symbol_data = {k: v for k, v in data_dict.items() if k[0].upper() == symbol.upper()}
+                rows_inserted = len(symbol_data)
+                
+                # Save to CSV
+                save_data_to_csv(data_dict, output_file, symbol)
+                
+                coin_stats[symbol] = {
+                    'rows': rows_inserted,
+                    'error': None,
+                    'success': True
+                }
+                
+                coin_elapsed = time.time() - coin_start_time
+                print(f"  ✓ {symbol}: {rows_inserted} rows inserted in {coin_elapsed:.1f}s", flush=True)
+            else:
+                error_message = "No data retrieved from API"
+                coin_stats[symbol] = {
+                    'rows': 0,
+                    'error': error_message,
+                    'success': False
+                }
+                errors.append((symbol, error_message))
+                print(f"  ✗ {symbol}: {error_message}", flush=True)
+        
+        except Exception as e:
+            error_message = f"{type(e).__name__}: {str(e)}"
+            coin_stats[symbol] = {
+                'rows': 0,
+                'error': error_message,
+                'success': False
+            }
+            errors.append((symbol, error_message))
+            print(f"  ✗ {symbol}: Error - {error_message}", flush=True)
+            import traceback
+            traceback.print_exc()
+        
+        # Rate limiting between coins
+        # CryptoCompare free tier: 100,000 calls/day, be conservative
+        # Wait 2 seconds between coins to avoid rate limits
+        if idx < len(coins):  # Don't sleep after last coin
+            print(f"  → Waiting 2.0 seconds before next coin...", flush=True)
+            time.sleep(2.0)
+    
+    # Close QuestDB connection
+    if questdb_conn:
+        questdb_conn.close()
+    
+    # Generate final report
+    total_elapsed = time.time() - total_start_time
+    successful_coins = [s for s, stats in coin_stats.items() if stats['success']]
+    failed_coins = [s for s, stats in coin_stats.items() if not stats['success']]
+    total_rows = sum(stats['rows'] for stats in coin_stats.values())
+    
+    print(f"\n{'='*80}", flush=True)
+    print(f"FINAL REPORT: Top {len(coins)} Cryptocurrencies Download", flush=True)
+    print(f"{'='*80}", flush=True)
+    print(f"Total coins processed: {len(coins)}", flush=True)
+    print(f"Successful: {len(successful_coins)}", flush=True)
+    print(f"Failed: {len(failed_coins)}", flush=True)
+    print(f"Total rows inserted: {total_rows:,}", flush=True)
+    print(f"Total time elapsed: {total_elapsed/60:.1f} minutes ({total_elapsed:.1f} seconds)", flush=True)
+    
+    if successful_coins:
+        print(f"\n{'='*80}", flush=True)
+        print(f"SUCCESSFUL COINS ({len(successful_coins)}):", flush=True)
+        print(f"{'='*80}", flush=True)
+        # Show rows per coin (sorted by rows, descending)
+        sorted_successful = sorted(
+            [(s, coin_stats[s]['rows']) for s in successful_coins],
+            key=lambda x: x[1],
+            reverse=True
+        )
+        for symbol, rows in sorted_successful:
+            print(f"  {symbol:10} : {rows:>8,} rows", flush=True)
+    
+    if failed_coins:
+        print(f"\n{'='*80}", flush=True)
+        print(f"FAILED COINS ({len(failed_coins)}):", flush=True)
+        print(f"{'='*80}", flush=True)
+        for symbol in failed_coins:
+            error_msg = coin_stats[symbol]['error']
+            print(f"  {symbol:10} : {error_msg}", flush=True)
+    
+    print(f"\n{'='*80}", flush=True)
+    print(f"Report complete", flush=True)
+    print(f"{'='*80}", flush=True)
+
+
+def download_top_1000_all_data_resume(dry_run=False, exclude_coins=None, api_key: str = None):
+    """
+    Resume download of top 1000 cryptocurrencies by market cap from the last processed coin.
+    
+    This function:
+    1. Gets top 1000 coins by market cap (ordered list)
+    2. Queries QuestDB to find which coins have data
+    3. Finds the last coin in the ordered list that has data (excluding exclude_coins)
+    4. Determines which coins to process (from last_coin onwards, skipping exclude_coins)
+    5. If dry_run=False, executes extraction starting from last_coin
+    6. If dry_run=True, only shows what would be done (no extraction)
+    
+    Args:
+        dry_run: If True, only show determination logic, don't execute extraction
+        exclude_coins: List of coin symbols to exclude when finding last coin (e.g., ['MON'])
+                       These coins will also be skipped during processing
+        api_key: Optional API key for CryptoCompare (helps with rate limits)
+    """
+    if exclude_coins is None:
+        exclude_coins = ['MON']
+    
+    # Convert exclude_coins to uppercase for comparison
+    exclude_coins_upper = [coin.upper() for coin in exclude_coins]
+    
+    print(f"\n{'='*80}", flush=True)
+    print(f"Resuming Top 1000 Download - Determination Logic", flush=True)
+    print(f"{'='*80}", flush=True)
+    
+    # Get top 1000 coins (ordered by market cap)
+    coins = get_top_1000_by_marketcap(api_key)
+    
+    if not coins:
+        print("Error: No coins retrieved from API", flush=True)
+        return
+    
+    # Log the complete list of coins for verification
+    print(f"\n[DEBUG] Top 1000 coins list (total: {len(coins)}):", flush=True)
+    print(f"  First 50 coins:", flush=True)
+    for i, coin in enumerate(coins[:50]):
+        print(f"    {i:3}: {coin}", flush=True)
+    print(f"  ... (middle {len(coins) - 100} coins omitted) ...", flush=True)
+    print(f"  Last 50 coins:", flush=True)
+    for i, coin in enumerate(coins[-50:], start=len(coins) - 50):
+        print(f"    {i:3}: {coin}", flush=True)
+    
+    # Check for duplicates in the list
+    coin_counts = {}
+    for coin in coins:
+        coin_counts[coin] = coin_counts.get(coin, 0) + 1
+    duplicates = {coin: count for coin, count in coin_counts.items() if count > 1}
+    if duplicates:
+        print(f"\n[DEBUG] Duplicate coins found in list:", flush=True)
+        for coin, count in sorted(duplicates.items(), key=lambda x: x[1], reverse=True):
+            indices = [i for i, c in enumerate(coins) if c == coin]
+            print(f"  {coin}: appears {count} times at indices {indices[:5]}{'...' if len(indices) > 5 else ''}", flush=True)
+    
+    # Setup QuestDB connection for checking existing data
+    questdb_conn = get_questdb_connection()
+    if not questdb_conn:
+        print("Error: QuestDB not available - cannot determine resume point", flush=True)
+        return
+    
+    # Ensure table exists before querying
+    create_questdb_table(questdb_conn)
+    
+    try:
+        # Query QuestDB to find which coins have data
+        with questdb_conn.cursor() as cur:
+            cur.execute("SELECT DISTINCT coin FROM crypto_hourly")
+            coins_in_db = set([row[0] for row in cur.fetchall()])
+        
+        print(f"\nDetermination Logic:", flush=True)
+        print(f"  Total coins in top 1000 list: {len(coins)}", flush=True)
+        print(f"  Coins with data in QuestDB: {len(coins_in_db)}", flush=True)
+        if exclude_coins_upper:
+            print(f"  Excluding from 'last coin' search: {', '.join(exclude_coins_upper)}", flush=True)
+        
+        # Create a mapping of coin -> index in the ordered list
+        # Use FIRST occurrence to handle duplicates (CoinGecko API may return duplicates)
+        coin_to_index = {}
+        for i, coin in enumerate(coins):
+            if coin not in coin_to_index:  # Only store first occurrence
+                coin_to_index[coin] = i
+        print(f"\n[DEBUG] Creating coin_to_index mapping for {len(coins)} coins", flush=True)
+        
+        # Log all coins in DB and their indices
+        print(f"\n[DEBUG] Coins in QuestDB and their indices:", flush=True)
+        db_coin_indices = {}
+        for coin in sorted(coins_in_db):
+            if coin in coin_to_index:
+                idx = coin_to_index[coin]
+                db_coin_indices[coin] = idx
+                excluded = " (EXCLUDED)" if coin in exclude_coins_upper else ""
+                print(f"  {coin}: index {idx} (position {idx + 1}){excluded}", flush=True)
+            else:
+                excluded = " (EXCLUDED)" if coin in exclude_coins_upper else ""
+                print(f"  {coin}: NOT FOUND in ordered list{excluded}", flush=True)
+        
+        # Find the coin with the LOWEST ranking (HIGHEST index) in the ordered list that has data in DB
+        # This is the LAST coin processed in the aborted run
+        last_coin_idx = -1
+        last_coin = None
+        
+        print(f"\n[DEBUG] Finding coin with highest index (excluding: {', '.join(exclude_coins_upper)}):", flush=True)
+        # For each coin in DB (excluding exclude_coins), find its index
+        # Find the one with the highest index (lowest ranking)
+        for coin in coins_in_db:
+            if coin not in exclude_coins_upper:
+                if coin in coin_to_index:
+                    coin_idx = coin_to_index[coin]
+                    print(f"  Checking {coin}: index {coin_idx}, current last_coin_idx = {last_coin_idx}", flush=True)
+                    if coin_idx > last_coin_idx:
+                        print(f"    → {coin} has higher index ({coin_idx} > {last_coin_idx}), updating last_coin", flush=True)
+                        last_coin_idx = coin_idx
+                        last_coin = coin
+                    else:
+                        print(f"    → {coin} has lower index ({coin_idx} <= {last_coin_idx}), skipping", flush=True)
+                else:
+                    print(f"  Checking {coin}: NOT FOUND in coin_to_index mapping, skipping", flush=True)
+            else:
+                print(f"  Checking {coin}: EXCLUDED, skipping", flush=True)
+        
+        if last_coin_idx < 0:
+            print(f"\n  ⚠ No coins found in QuestDB (excluding {', '.join(exclude_coins_upper)})", flush=True)
+            print(f"  → Will start from first coin: {coins[0] if coins else 'N/A'}", flush=True)
+            last_coin_idx = -1  # Start from beginning
+            last_coin = None
+        else:
+            print(f"\n  ✓ Last coin in batch: {last_coin} (index {last_coin_idx + 1}/{len(coins)})", flush=True)
+            
+            # Get row count for last coin
+            with questdb_conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) FROM crypto_hourly WHERE coin = %s", (last_coin,))
+                row_count = cur.fetchone()[0]
+                print(f"  ✓ {last_coin} has {row_count:,} rows in QuestDB (may be partial - aborted run)", flush=True)
+        
+        # Determine coins to process
+        print(f"\n[DEBUG] Determining coins to process:", flush=True)
+        if last_coin_idx >= 0:
+            print(f"  last_coin_idx = {last_coin_idx}, last_coin = {last_coin}", flush=True)
+            print(f"  Will process coins from index {last_coin_idx} to {len(coins) - 1} (total {len(coins) - last_coin_idx} positions)", flush=True)
+            coins_to_process = []
+            for i in range(last_coin_idx, len(coins)):
+                coin = coins[i]
+                if coin not in exclude_coins_upper:
+                    coins_to_process.append((i, coin))
+                    if len(coins_to_process) <= 5:  # Log first 5
+                        print(f"    Added: {coin} at index {i} (position {i + 1})", flush=True)
+                else:
+                    if i < last_coin_idx + 10:  # Log first 10 excluded
+                        print(f"    Skipped (excluded): {coin} at index {i} (position {i + 1})", flush=True)
+            
+            print(f"  Total coins_to_process: {len(coins_to_process)}", flush=True)
+            if len(coins_to_process) > 5:
+                print(f"    ... and {len(coins_to_process) - 5} more", flush=True)
+            
+            coins_before_last = last_coin_idx
+            coins_after_last = len(coins_to_process)
+            next_coin_after_last = coins_to_process[1][1] if len(coins_to_process) > 1 else None
+            
+            print(f"\n[DEBUG] Calculation results:", flush=True)
+            print(f"  coins_before_last = {coins_before_last} (indices 0-{coins_before_last - 1})", flush=True)
+            print(f"  coins_after_last = {coins_after_last} (indices {last_coin_idx}-{len(coins) - 1}, excluding exclude_coins)", flush=True)
+            if next_coin_after_last:
+                # Find the index in the original coins list
+                if next_coin_after_last in coin_to_index:
+                    next_idx = coin_to_index[next_coin_after_last]
+                    print(f"  next_coin_after_last = {next_coin_after_last} at index {next_idx} (position {next_idx + 1}) in ordered list", flush=True)
+                else:
+                    print(f"  next_coin_after_last = {next_coin_after_last} (NOT FOUND in coin_to_index)", flush=True)
+            else:
+                print(f"  next_coin_after_last = None (no coins after last_coin)", flush=True)
+        else:
+            # No coins found, start from beginning
+            print(f"  No coins found in DB (excluding exclude_coins), starting from beginning", flush=True)
+            coins_to_process = []
+            for i, coin in enumerate(coins):
+                if coin not in exclude_coins_upper:
+                    coins_to_process.append((i, coin))
+            coins_before_last = 0
+            coins_after_last = len(coins_to_process)
+            next_coin_after_last = coins_to_process[1][1] if len(coins_to_process) > 1 else None
+            print(f"  coins_before_last = 0, coins_after_last = {coins_after_last}", flush=True)
+            if next_coin_after_last:
+                print(f"  next_coin_after_last = {next_coin_after_last}", flush=True)
+        
+        # Show determination results
+        print(f"\n  Processing Plan:", flush=True)
+        if last_coin_idx >= 0:
+            print(f"  - Will redo: {last_coin} (in case partial)", flush=True)
+            if next_coin_after_last:
+                print(f"  - Will continue with: {next_coin_after_last} (next after {last_coin})", flush=True)
+            print(f"  - Total coins to process: {coins_after_last} (starting from {last_coin})", flush=True)
+            print(f"  - Will skip: {coins_before_last} coins before {last_coin} (already fully processed)", flush=True)
+        else:
+            print(f"  - Will start from: {coins[0]} (first coin)", flush=True)
+            if next_coin_after_last:
+                print(f"  - Will continue with: {next_coin_after_last} (next after {coins[0]})", flush=True)
+            print(f"  - Total coins to process: {coins_after_last}", flush=True)
+        
+        # Show sample of skipped coins (for reference only)
+        skipped_coins = []
+        if last_coin_idx >= 0:
+            for i in range(last_coin_idx):
+                if coins[i] not in exclude_coins_upper:
+                    skipped_coins.append(coins[i])
+        
+        if skipped_coins:
+            if len(skipped_coins) <= 10:
+                print(f"    (Skipped coins: {', '.join(skipped_coins)})", flush=True)
+            else:
+                print(f"    (Sample skipped coins: {', '.join(skipped_coins[:5])} ... {', '.join(skipped_coins[-3:])})", flush=True)
+        
+        if exclude_coins_upper:
+            print(f"  - Will skip: {', '.join(exclude_coins_upper)} (will be done separately)", flush=True)
+        
+        # Show dry run status
+        if dry_run:
+            print(f"\n{'='*80}", flush=True)
+            print(f"[DRY RUN - No extraction will be performed]", flush=True)
+            print(f"{'='*80}", flush=True)
+            questdb_conn.close()
+            return
+        
+        # Execute extraction
+        print(f"\n{'='*80}", flush=True)
+        print(f"Starting extraction from {last_coin if last_coin else coins[0]} onwards", flush=True)
+        print(f"{'='*80}", flush=True)
+        
+        # Setup output directory
+        home_dir = Path.home()
+        base_data_dir = home_dir / ".dex_trades_extractor" / ".files" / "price" / "cryptocompare"
+        base_data_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Ensure table exists
+        create_questdb_table(questdb_conn)
+        
+        # Tracking structures for final report
+        coin_stats = {}  # symbol -> {'rows': int, 'error': str or None, 'success': bool}
+        errors = []  # List of (symbol, error_message) tuples
+        
+        currency = 'USD'
+        total_start_time = time.time()
+        
+        # Process coins starting from last_coin_idx
+        for idx_offset, (original_idx, symbol) in enumerate(coins_to_process, 1):
+            print(f"\n{'='*60}", flush=True)
+            print(f"Processing {idx_offset}/{len(coins_to_process)}: {symbol} (original position: {original_idx + 1}/{len(coins)})", flush=True)
+            print(f"{'='*60}", flush=True)
+            
+            coin_start_time = time.time()
+            rows_inserted = 0
+            error_message = None
+            
+            try:
+                # Set output file path
+                output_file = str(base_data_dir / f"{symbol.lower()}.csv")
+                
+                # Load existing data from CSV and QuestDB
+                data_dict = {}
+                
+                # Load from CSV
+                csv_data = load_existing_csv(output_file, symbol)
+                data_dict.update(csv_data)
+                
+                # Load from QuestDB (if available)
+                if questdb_conn:
+                    questdb_data = load_existing_questdb(questdb_conn, symbol)
+                    data_dict.update(questdb_data)
+                
+                # Fetch all data (no date ranges - get ALL historical data)
+                data_dict = fetch_all_hourly_data(
+                    symbol=symbol,
+                    currency=currency,
+                    api_key=api_key,
+                    output_file=output_file,
+                    start_ts=None,  # No start date
+                    end_ts=None,    # No end date
+                    data_dict=data_dict,
+                    questdb_conn=questdb_conn
+                )
+                
+                if data_dict:
+                    # Filter for this symbol
+                    symbol_data = {k: v for k, v in data_dict.items() if k[0].upper() == symbol.upper()}
+                    rows_inserted = len(symbol_data)
+                    
+                    # Save to CSV
+                    save_data_to_csv(data_dict, output_file, symbol)
+                    
+                    coin_stats[symbol] = {
+                        'rows': rows_inserted,
+                        'error': None,
+                        'success': True
+                    }
+                    
+                    coin_elapsed = time.time() - coin_start_time
+                    print(f"  ✓ {symbol}: {rows_inserted} rows inserted in {coin_elapsed:.1f}s", flush=True)
+                else:
+                    error_message = "No data retrieved from API"
+                    coin_stats[symbol] = {
+                        'rows': 0,
+                        'error': error_message,
+                        'success': False
+                    }
+                    errors.append((symbol, error_message))
+                    print(f"  ✗ {symbol}: {error_message}", flush=True)
+            
+            except Exception as e:
+                error_message = f"{type(e).__name__}: {str(e)}"
+                coin_stats[symbol] = {
+                    'rows': 0,
+                    'error': error_message,
+                    'success': False
+                }
+                errors.append((symbol, error_message))
+                print(f"  ✗ {symbol}: Error - {error_message}", flush=True)
+                import traceback
+                traceback.print_exc()
+            
+            # Rate limiting between coins
+            if idx_offset < len(coins_to_process):  # Don't sleep after last coin
+                print(f"  → Waiting 2.0 seconds before next coin...", flush=True)
+                time.sleep(2.0)
+        
+        # Generate final report
+        total_elapsed = time.time() - total_start_time
+        successful_coins = [s for s, stats in coin_stats.items() if stats['success']]
+        failed_coins = [s for s, stats in coin_stats.items() if not stats['success']]
+        total_rows = sum(stats['rows'] for stats in coin_stats.values())
+        
+        print(f"\n{'='*80}", flush=True)
+        print(f"FINAL REPORT: Resume Download", flush=True)
+        print(f"{'='*80}", flush=True)
+        print(f"Starting coin: {last_coin if last_coin else coins[0]}", flush=True)
+        print(f"Total coins processed: {len(coins_to_process)}", flush=True)
+        print(f"Successful: {len(successful_coins)}", flush=True)
+        print(f"Failed: {len(failed_coins)}", flush=True)
+        print(f"Total rows inserted: {total_rows:,}", flush=True)
+        print(f"Total time elapsed: {total_elapsed/60:.1f} minutes ({total_elapsed:.1f} seconds)", flush=True)
+        
+        if successful_coins:
+            print(f"\n{'='*80}", flush=True)
+            print(f"SUCCESSFUL COINS ({len(successful_coins)}):", flush=True)
+            print(f"{'='*80}", flush=True)
+            sorted_successful = sorted(
+                [(s, coin_stats[s]['rows']) for s in successful_coins],
+                key=lambda x: x[1],
+                reverse=True
+            )
+            for symbol, rows in sorted_successful:
+                print(f"  {symbol:10} : {rows:>8,} rows", flush=True)
+        
+        if failed_coins:
+            print(f"\n{'='*80}", flush=True)
+            print(f"FAILED COINS ({len(failed_coins)}):", flush=True)
+            print(f"{'='*80}", flush=True)
+            for symbol in failed_coins:
+                error_msg = coin_stats[symbol]['error']
+                print(f"  {symbol:10} : {error_msg}", flush=True)
+        
+        print(f"\n{'='*80}", flush=True)
+        print(f"Report complete", flush=True)
+        print(f"{'='*80}", flush=True)
+    
+    finally:
+        questdb_conn.close()
+
+
 def main():
     """Main function"""
+    # Optional: API key from environment variable
+    api_key = os.getenv('CRYPTOCOMPARE_API_KEY')
+    
+    # Check for special "top1000" command
+    if len(sys.argv) >= 2 and sys.argv[1].lower() == 'top1000':
+        print("="*80, flush=True)
+        print("Downloading all hourly data for top 1000 cryptocurrencies", flush=True)
+        print("="*80, flush=True)
+        download_top_1000_all_data(api_key)
+        return
+    
     if len(sys.argv) < 2:
         print("Usage: python3 download_cryptocompare_hourly.py <SYMBOL> [CURRENCY] [START_DATE] [END_DATE]", flush=True)
-        print("\nExample (all data):", flush=True)
+        print("   OR: python3 download_cryptocompare_hourly.py top1000", flush=True)
+        print("\nExample (all data for single coin):", flush=True)
         print("  python3 download_cryptocompare_hourly.py BTC", flush=True)
         print("  python3 download_cryptocompare_hourly.py BTC USD", flush=True)
-        print("\nExample (date range):", flush=True)
+        print("\nExample (date range for single coin):", flush=True)
         print("  python3 download_cryptocompare_hourly.py BTC USD 2024/01/01 2024/12/31", flush=True)
         print("  python3 download_cryptocompare_hourly.py ETH 2024/06/01 2024/06/30", flush=True)
+        print("\nExample (top 1000 coins - all historical data):", flush=True)
+        print("  python3 download_cryptocompare_hourly.py top1000", flush=True)
         print("\nDate format: YYYY/MM/DD", flush=True)
         print("Start date: YYYY/MM/DD 00:00:00 (inclusive)", flush=True)
         print("End date: (YYYY/MM/DD + 1 day) 00:00:00 (exclusive)", flush=True)
