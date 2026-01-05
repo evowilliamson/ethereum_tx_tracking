@@ -52,8 +52,6 @@ The system uses multiple detection strategies, so even if a DEX is not explicitl
 
 The system is built using an abstraction layer that supports multiple blockchain types:
 
-![Architecture Diagram](docs/architecture_diagram.png)
-
 ### Core Components
 
 1. **`blockchain_interface.py`**: Abstract base classes defining the interface for transaction fetchers and trade parsers. Provides factory functions to get the appropriate implementation for each chain.
