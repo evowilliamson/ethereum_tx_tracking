@@ -197,18 +197,31 @@ Required packages:
 
 #### Getting API Keys
 
-**EVM Chains (Etherscan API V2)**:
+**API Usage by Chain:**
+
+Most EVM chains use **Etherscan API V2** (`api.etherscan.io/v2/api`), which supports multiple chains via chain ID. A single Etherscan API key works for these chains:
+
+**Chains using Etherscan API V2** (7 chains):
 - **Ethereum**: https://etherscan.io/apis (free tier: 5 calls/sec)
-- **Base**: https://basescan.org/apis
-- **Arbitrum**: https://arbiscan.io/apis
-- **Optimism**: https://optimistic.etherscan.io/apis
-- **Polygon**: https://polygonscan.com/apis
-- **Avalanche**: https://snowtrace.io/apis
-- **Binance Smart Chain**: Note - BSCScan API was deprecated in Dec 2025. The tool uses direct RPC calls instead.
+- **Base**: https://basescan.org/apis (or use Etherscan key)
+- **Arbitrum**: https://arbiscan.io/apis (or use Etherscan key)
+- **Polygon**: https://polygonscan.com/apis (or use Etherscan key)
+- **Linea**: https://lineascan.build/apis (or use Etherscan key)
+- **Monad**: https://monadscan.com (or use Etherscan key)
+- **Katana (Ronin)**: https://katana.roninchain.com (or use Etherscan key)
+
+**Chains using separate Etherscan endpoint**:
+- **Optimism**: https://optimistic.etherscan.io/apis (uses `api-optimistic.etherscan.io` - separate endpoint, but still Etherscan)
+
+**Chains using different APIs**:
+- **Avalanche**: https://snowtrace.io/apis (uses Snowtrace API, not Etherscan)
+- **Binance Smart Chain**: Uses GoldRush/CovalentHQ API (https://www.covalenthq.com/) - Note: BSCScan API was deprecated in Dec 2025
 
 **Non-EVM Chains**:
 - **Solana**: Uses public RPC (no key needed) or configure custom RPC endpoint
 - **Sui**: Uses public RPC (no key needed) or configure custom RPC endpoint
+
+**Note**: For chains using Etherscan API V2, you can use a single Etherscan API key for all of them. The API automatically routes requests to the correct chain based on the `chain_id` parameter.
 
 #### Example Configuration
 
