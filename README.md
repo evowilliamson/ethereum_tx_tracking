@@ -121,6 +121,69 @@ This filtering excludes:
 - Airdrops (only receive tokens, don't send)
 - Protocol deposits/withdrawals (identified by protocol token patterns)
 
+### Price Calculation with QuestDB
+
+The system uses QuestDB (time-series database) as the primary source for cryptocurrency price data, stored as hourly price points from CryptoCompare API.
+
+#### Database Structure
+
+Price data is stored in the `crypto_hourly` table:
+
+```sql
+CREATE TABLE crypto_hourly (
+    coin SYMBOL CAPACITY 50 CACHE,
+    timestamp TIMESTAMP,
+    datetime STRING,
+    open DOUBLE
+) TIMESTAMP(timestamp) PARTITION BY DAY;
+```
+
+**Columns:**
+- **coin**: Cryptocurrency symbol (SYMBOL type, indexed, e.g., 'BTC', 'ETH')
+- **timestamp**: Hourly timestamp (TIMESTAMP type, designated timestamp - automatically optimized)
+- **datetime**: Human-readable datetime string (STRING type, for display/logging only)
+- **open**: Opening price for that hour (DOUBLE type, USD)
+
+**Key Structure:**
+- QuestDB does not support PRIMARY KEY constraints
+- Logical composite key: `(coin, timestamp)` 
+- Index on `coin` column for fast filtering
+- Designated timestamp (`TIMESTAMP(timestamp)`) automatically optimized for time-range queries
+- Partitioned by DAY for performance
+
+**Query Performance:**
+- Use `timestamp` (TIMESTAMP type) for all WHERE clause filters - this is automatically optimized
+- Do NOT use `datetime` (STRING type) in WHERE clauses - it's not optimized for queries
+- Current query pattern: `WHERE coin = %s AND timestamp >= %s AND timestamp <= %s`
+
+#### Price Lookup Strategy
+
+For each trade with a specific timestamp, the system performs weighted interpolation between two hourly price points:
+
+1. **Query QuestDB** for the two hourly rows needed:
+   - Hour before the trade timestamp (e.g., 03:00:00 for trade at 03:33:56)
+   - Hour after the trade timestamp (e.g., 04:00:00 for trade at 03:33:56)
+
+2. **Weighted Average Calculation**:
+   - If trade is at 03:33:56 (33.93 minutes into the hour)
+   - Price at 03:00:00 gets weight: 26.07/60 ≈ 0.435 (farther away)
+   - Price at 04:00:00 gets weight: 33.93/60 ≈ 0.565 (closer in time)
+   - Interpolated price = (price_03:00 × 0.435) + (price_04:00 × 0.565)
+
+3. **Missing Data Handling**:
+   - If either hourly row is missing (or coin doesn't exist in DB), the system:
+     - Fetches **ALL historical data** for that coin from CryptoCompare API
+     - Inserts all data into `crypto_hourly` table
+     - Then performs interpolation using the newly inserted data
+   - This ensures complete data coverage and future-proofs the database (future trades for the same coin will have data available)
+
+#### Data Sources
+
+- **Primary**: QuestDB `crypto_hourly` table (populated from CryptoCompare API)
+- **Top 1000 coins**: Pre-populated via batch extraction process
+- **Other coins**: Fetched on-demand when needed (full historical dataset)
+- **Fallback**: CoinGecko API (if QuestDB lookup fails)
+
 ### Output Format
 
 The tool outputs trade data in JSON format with the following structure:
