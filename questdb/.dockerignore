@@ -1,0 +1,18 @@
+# Ignore documentation and test files
+*.md
+TESTING.md
+DOCKER_EXPLANATION.md
+README.md
+
+# Ignore git files
+.git
+.gitignore
+
+# Ignore backup scripts
+check_*.sh
+backup_*.sh
+
+# Ignore any other unnecessary files
+*.log
+*.tmp
+

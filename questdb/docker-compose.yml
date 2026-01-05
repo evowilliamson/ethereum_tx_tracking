@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  questdb:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: questdb
+    ports:
+      - "80:80"      # HTTP/Web console
+      - "8812:8812" # PostgreSQL wire protocol
+      - "9009:9009" # ILP (InfluxDB Line Protocol)
+    volumes:
+      - questdb_data:/data/questdb
+    environment:
+      - QUESTDB_DATA_DIR=/data/questdb
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  questdb_data:
+    driver: local
+
