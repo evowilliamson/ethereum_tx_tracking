@@ -24,6 +24,12 @@ from questdb import (
 # CoinGecko integration
 from coingecko import get_top_1000_by_marketcap
 
+# Configuration
+try:
+    from blockchain_settings import CRYPTOCOMPARE_API_KEY
+except ImportError:
+    CRYPTOCOMPARE_API_KEY = None
+
 
 def load_existing_csv(output_file: str, symbol: str) -> dict:
     """
@@ -938,8 +944,8 @@ def download_top_1000_all_data_resume(dry_run=False, exclude_coins=None, api_key
 
 def main():
     """Main function"""
-    # Optional: API key from environment variable, with fallback
-    api_key = os.getenv('CRYPTOCOMPARE_API_KEY') or 'c9495c9f31cb788d645d7b1d92ff4b035dd67cf5f19b392d80dabfd88e2b496b'
+    # Get API key from config file or environment variable
+    api_key = CRYPTOCOMPARE_API_KEY or os.getenv('CRYPTOCOMPARE_API_KEY')
     
     # Debug: Print arguments for troubleshooting
     if len(sys.argv) > 1:
@@ -1047,8 +1053,8 @@ def main():
     # Set output file path (always use default)
     output_file = str(base_data_dir / f"{symbol.lower()}.csv")
     
-    # Optional: API key from environment variable, with fallback
-    api_key = os.getenv('CRYPTOCOMPARE_API_KEY') or 'c9495c9f31cb788d645d7b1d92ff4b035dd67cf5f19b392d80dabfd88e2b496b'
+    # Get API key from config file or environment variable
+    api_key = CRYPTOCOMPARE_API_KEY or os.getenv('CRYPTOCOMPARE_API_KEY')
     
     print("="*60, flush=True)
     print(f"Downloading Hourly Historical Data from CryptoCompare", flush=True)

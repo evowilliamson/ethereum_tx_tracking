@@ -67,3 +67,8 @@ NON_EVM_ADDRESSES = {
     'sui': os.getenv("SUI_ADDRESS", "0x6525b9a3a48a54e518cf57618c68621074be2ffd724f8a51e7b3048682acf572"),  # Sui address (66 chars)
 }
 
+# CryptoCompare API Key (optional - for higher rate limits when fetching price data)
+# Get free API key at: https://www.cryptocompare.com/cryptopian/api-keys
+# Set via environment variable: CRYPTOCOMPARE_API_KEY
+CRYPTOCOMPARE_API_KEY = os.getenv("CRYPTOCOMPARE_API_KEY", "c9495c9f31cb788d645d7b1d92ff4b035dd67cf5f19b392d80dabfd88e2b496b")
+

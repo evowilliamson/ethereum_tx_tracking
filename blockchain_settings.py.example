@@ -60,3 +60,7 @@ RPC_ENDPOINTS = {
 # See chains_config.py for full list and configuration
 BLOCKCHAIN = os.getenv("BLOCKCHAIN", "ethereum")
 
+# CryptoCompare API Key (optional - for higher rate limits when fetching price data)
+# Get free API key at: https://www.cryptocompare.com/cryptopian/api-keys
+CRYPTOCOMPARE_API_KEY = os.getenv("CRYPTOCOMPARE_API_KEY", "")
+
