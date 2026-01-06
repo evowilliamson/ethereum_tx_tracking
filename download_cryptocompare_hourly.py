@@ -938,8 +938,8 @@ def download_top_1000_all_data_resume(dry_run=False, exclude_coins=None, api_key
 
 def main():
     """Main function"""
-    # Optional: API key from environment variable
-    api_key = os.getenv('CRYPTOCOMPARE_API_KEY')
+    # Optional: API key from environment variable, with fallback
+    api_key = os.getenv('CRYPTOCOMPARE_API_KEY') or 'c9495c9f31cb788d645d7b1d92ff4b035dd67cf5f19b392d80dabfd88e2b496b'
     
     # Debug: Print arguments for troubleshooting
     if len(sys.argv) > 1:
@@ -1047,8 +1047,8 @@ def main():
     # Set output file path (always use default)
     output_file = str(base_data_dir / f"{symbol.lower()}.csv")
     
-    # Optional: API key from environment variable
-    api_key = os.getenv('CRYPTOCOMPARE_API_KEY')
+    # Optional: API key from environment variable, with fallback
+    api_key = os.getenv('CRYPTOCOMPARE_API_KEY') or 'c9495c9f31cb788d645d7b1d92ff4b035dd67cf5f19b392d80dabfd88e2b496b'
     
     print("="*60, flush=True)
     print(f"Downloading Hourly Historical Data from CryptoCompare", flush=True)
