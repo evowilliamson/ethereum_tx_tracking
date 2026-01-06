@@ -299,3 +299,5 @@ docker exec -it questdb bash
 
 The flow: Build image → Start container → Entrypoint runs → QuestDB starts → Ready!
 
+
+

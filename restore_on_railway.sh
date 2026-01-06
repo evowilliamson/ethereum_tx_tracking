@@ -71,3 +71,6 @@ echo "Verify with:"
 echo "  python3 -c \"from questdb import get_questdb_connection; conn = get_questdb_connection(); cur = conn.cursor(); cur.execute('SELECT COUNT(*) FROM crypto_hourly'); print(f'Total rows: {cur.fetchone()[0]}'); conn.close()\""
 echo ""
 
+
+
+

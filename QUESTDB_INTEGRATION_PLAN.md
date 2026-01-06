@@ -243,3 +243,5 @@ The `fetch_and_insert_coin_data_from_cryptocompare()` function needs a CryptoCom
 - Price sources: Track "questdb", "questdb_on_demand", "coingecko", etc. for analytics
 - Graceful degradation: If QuestDB fails, fallback to CoinGecko (existing behavior)
 
+
+

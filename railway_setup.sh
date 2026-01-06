@@ -17,3 +17,6 @@ echo "✓ Railway environment configured:"
 echo "  vm.max_map_count: $(sysctl -n vm.max_map_count 2>/dev/null || echo 'N/A')"
 echo "  JAVA_HOME: ${JAVA_HOME:-'Not set'}"
 
+
+
+

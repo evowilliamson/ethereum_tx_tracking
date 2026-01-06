@@ -36,25 +36,50 @@ git push origin main
 
 ---
 
-## Step 2: Create New Service in Railway
+## Step 2: Create New SERVICE (NOT New Project!)
+
+### ⚠️ CRITICAL: Service vs Project
+- **Service** = New container/service within your EXISTING project ✅ (What we want)
+- **Project** = Completely new/separate project ❌ (NOT what we want - would be isolated)
+
+**You want a NEW SERVICE in your EXISTING PROJECT!**
 
 ### 2.1 Go to Railway Dashboard
 1. Open https://railway.app
 2. Log in to your account
-3. Select your **existing project** (the one with `just-shell` service)
+3. **VERY IMPORTANT: Navigate INTO your existing project** (the one with `just-shell` service)
+   - You should see the `just-shell` service listed
+   - You should be INSIDE the project view
+   - Do NOT stay at the top-level projects list
 
-### 2.2 Create New Service
-1. Click **"+ New"** button (top right or in the project)
-2. Select **"GitHub Repo"** (or "Deploy from GitHub repo")
-3. Railway will show your GitHub repositories
-4. **Select your repository** (`ethereum_tx_tracking` or whatever it's named)
-5. Railway will ask: **"Configure a Service"**
-6. Click **"Add Service"** or **"Deploy"**
+### 2.2 Create New Service (Within Current Project)
+**Make sure you're INSIDE your project, not at the top level!**
 
-### 2.3 Service Created
-- Railway will create a new service
+1. While INSIDE your project, click **"+ New"** button
+   - This should be within the project view (not top-level "New Project")
+2. You'll see options like:
+   - **"GitHub Repo"** or **"Deploy from GitHub repo"** ✅ Choose this
+   - **"Empty Service"** ✅ This also works (creates service, you configure later)
+   - **"New Project"** ❌ Do NOT choose this! (This creates a separate project)
+3. If you selected "GitHub Repo":
+   - Railway will show your GitHub repositories
+   - **Select:** `evowilliamson/evm-dex-trades-extractor`
+   - Railway will ask: **"Configure a Service"**
+   - Click **"Add Service"** or **"Deploy"**
+
+### 2.3 Verify Service Created (Not New Project)
+After creating, verify:
+- ✅ You should see TWO services in your project: `just-shell` and the new one
+- ✅ Both services are listed in the SAME project
+- ❌ If you see only one service, you might have created a new project (wrong!)
+
+### 2.4 Service Created
+- Railway will create a new service in your existing project
 - It will auto-detect your code
-- Name it: `questdb-docker` (or Railway will auto-name it, you can rename later)
+- Name it: `questdb-docker` (or rename it in Settings → Name)
+- You should now have TWO services in your project:
+  - `just-shell` (your existing service)
+  - `questdb-docker` (your new service)
 
 ---
 

@@ -77,3 +77,6 @@ curl --upload-file /home/ivo/questdb_backup_20260105_160236.tar.gz https://trans
 cd /tmp && wget "PASTE_URL_HERE"
 ```
 
+
+
+

@@ -123,7 +123,7 @@ This filtering excludes:
 
 ### Price Calculation with QuestDB
 
-The system uses QuestDB (time-series database) as the primary source for cryptocurrency price data, stored as hourly price points from CryptoCompare API.
+The system uses QuestDB (time-series database) as the sole source for cryptocurrency price data, stored as hourly price points from CryptoCompare API. CoinGecko is only used to obtain the list of top 1000 coins by market cap for batch data collection.
 
 #### Database Structure
 
@@ -179,10 +179,10 @@ For each trade with a specific timestamp, the system performs weighted interpola
 
 #### Data Sources
 
-- **Primary**: QuestDB `crypto_hourly` table (populated from CryptoCompare API)
-- **Top 1000 coins**: Pre-populated via batch extraction process
-- **Other coins**: Fetched on-demand when needed (full historical dataset)
-- **Fallback**: CoinGecko API (if QuestDB lookup fails)
+- **Price Data**: QuestDB `crypto_hourly` table (populated from CryptoCompare API)
+  - **Top 1000 coins**: Pre-populated via batch extraction process (coin list obtained from CoinGecko API by market cap)
+  - **Other coins**: Fetched on-demand from CryptoCompare API when needed (full historical dataset)
+- **Note**: CoinGecko API is only used to obtain the top 1000 coins list (by market cap) for batch data collection. All price lookups use QuestDB with data from CryptoCompare API.
 
 ### Output Format
 
