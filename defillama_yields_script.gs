@@ -24,6 +24,7 @@ function onOpen() {
     .addItem('Show Followed', 'showFollowedYields')
     .addSeparator()
     .addItem('Copy to Historical', 'copyToHistorical')
+    .addItem('Delete Historical', 'deleteHistorical')
     .addToUi();
 }
 
@@ -380,7 +381,7 @@ function getDefiLlamaYields() {
       if (a.tracingStatus !== 'Follow' && b.tracingStatus === 'Follow') return 1;
       // Secondary sort: TVL ascending
       if (a.tvl !== b.tvl) {
-        return a.tvl - b.tvl;
+        return b.tvl - a.tvl;
       }
       return 0;
     });
@@ -550,11 +551,11 @@ function copyToHistorical() {
     spreadsheet.toast('Starting to copy filtered data to Historical sheet...', 'Copy to Historical', 2);
     
     // Read filter configuration from Historical sheet (row 3)
-    // Convert to string to handle numbers or other types from Google Sheets
-    const followFilter = String(historicalSheet.getRange('C3').getValue() || '').trim();  // "Follow" or "All"
-    const chainFilter = String(historicalSheet.getRange('D3').getValue() || '').trim();
-    const projectFilter = String(historicalSheet.getRange('E3').getValue() || '').trim();
-    const symbolFilter = String(historicalSheet.getRange('F3').getValue() || '').trim();
+    // Layout: D=Tracing ("Follow"/"Don't follow"/"All"), E=Chain, F=Project, G=Symbol
+    const followFilter = String(historicalSheet.getRange('D3').getValue() || '').trim();  // "Follow" or "All"
+    const chainFilter = String(historicalSheet.getRange('E3').getValue() || '').trim();
+    const projectFilter = String(historicalSheet.getRange('F3').getValue() || '').trim();
+    const symbolFilter = String(historicalSheet.getRange('G3').getValue() || '').trim();
     
     // Read range filters (min from row 2, max from row 3)
     // Column mapping: G=TVL, H=APY, I=APY Base, J=APY Reward, K=Pool Meta
@@ -774,8 +775,8 @@ function copyToHistorical() {
         // Prepare row: datetime, Coin, Pool ID, Tracing, Chain, Project, Symbol, TVL, APY, APY Base, APY Reward, Pool Meta
         filteredRows.push([
           currentDateTime,  // Column A: datetime
-          coin,             // Column B: Coin
-          poolId,           // Column C: Pool ID
+          poolId,           // Column B: Pool ID
+          coin,             // Column C: Coin
           tracingStatus,    // Column D: Tracing (Follow/Don't follow)
           chain,            // Column E: Chain
           project,          // Column F: Project
@@ -818,6 +819,182 @@ function copyToHistorical() {
     Logger.log('Error in copyToHistorical: ' + error);
     spreadsheet.toast('Error: ' + error, 'Copy to Historical - Error', 5);
     SpreadsheetApp.getUi().alert('Error copying to Historical: ' + error);
+  }
+}
+
+/**
+ * Delete filtered rows from the Historical sheet according to the configured filters
+ * Filters on D3 (Tracing), E3 (Chain), F3 (Project), G3 (Symbol);
+ * Range filters: H2/H3 (TVL), I2/I3 (APY), J2/J3 (APY Base), K2/K3 (APY Reward), L2/L3 (Pool Meta)
+ */
+function deleteHistorical() {
+  const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  try {
+    const historicalSheet = spreadsheet.getSheetByName('Historical');
+    if (!historicalSheet) {
+      throw new Error('Historical sheet not found');
+    }
+
+    spreadsheet.toast('Deleting filtered rows from Historical sheet...', 'Delete Historical', 2);
+
+    const lastCol = historicalSheet.getLastColumn();
+    const headerRow = historicalSheet.getRange(4, 1, 1, lastCol).getValues()[0];
+    const findCol = (label) => {
+      const target = (label || '').toString().trim().toLowerCase();
+      const idx = headerRow.findIndex(h => (h || '').toString().trim().toLowerCase() === target);
+      return idx >= 0 ? idx + 1 : null;
+    };
+
+    const tracingCol = findCol('Tracing') || 4;
+    const chainCol = findCol('Chain') || 5;
+    const projectCol = findCol('Project') || 6;
+    const symbolCol = findCol('Symbol') || 7;
+    const tvlCol = findCol('TVL (USD)') || 8;
+    const apyCol = findCol('APY') || 9;
+    const apyBaseCol = findCol('APY Base') || 10;
+    const apyRewardCol = findCol('APY Reward') || 11;
+    const poolMetaCol = findCol('Pool Meta') || 12;
+
+    const followFilter = String(historicalSheet.getRange(3, tracingCol).getValue() || '').trim();
+    const chainFilter = String(historicalSheet.getRange(3, chainCol).getValue() || '').trim();
+    const projectFilter = String(historicalSheet.getRange(3, projectCol).getValue() || '').trim();
+    const symbolFilter = String(historicalSheet.getRange(3, symbolCol).getValue() || '').trim();
+
+    const tvlMin = parseFilterValue(historicalSheet.getRange(2, tvlCol).getValue());
+    const tvlMax = parseFilterValue(historicalSheet.getRange(3, tvlCol).getValue());
+    const apyMin = parseFilterValue(historicalSheet.getRange(2, apyCol).getValue());
+    const apyMax = parseFilterValue(historicalSheet.getRange(3, apyCol).getValue());
+    const apyBaseMin = parseFilterValue(historicalSheet.getRange(2, apyBaseCol).getValue());
+    const apyBaseMax = parseFilterValue(historicalSheet.getRange(3, apyBaseCol).getValue());
+    const apyRewardMin = parseFilterValue(historicalSheet.getRange(2, apyRewardCol).getValue());
+    const apyRewardMax = parseFilterValue(historicalSheet.getRange(3, apyRewardCol).getValue());
+    const poolMetaMin = parseFilterValue(historicalSheet.getRange(2, poolMetaCol).getValue());
+    const poolMetaMax = parseFilterValue(historicalSheet.getRange(3, poolMetaCol).getValue());
+
+    Logger.log('Historical delete filters: Follow=' + followFilter + ', Chain=' + chainFilter + ', Project=' + projectFilter + ', Symbol=' + symbolFilter);
+    Logger.log('Historical numeric ranges: TVL ' + tvlMin + '-' + tvlMax + ', APY ' + apyMin + '-' + apyMax +
+               ', APY Base ' + apyBaseMin + '-' + apyBaseMax + ', APY Reward ' + apyRewardMin + '-' + apyRewardMax +
+               ', Pool Meta ' + poolMetaMin + '-' + poolMetaMax);
+
+    const isAllValue = (val) => !val || val.trim().toLowerCase() === 'all';
+    const chainFilters = isAllValue(chainFilter) ? [] : chainFilter.split(',').map(s => String(s).trim().toLowerCase()).filter(s => s.length > 0);
+    const projectFilters = isAllValue(projectFilter) ? [] : projectFilter.split(',').map(s => String(s).trim().toLowerCase()).filter(s => s.length > 0);
+    const symbolFilters = isAllValue(symbolFilter) ? [] : symbolFilter.split(',').map(s => String(s).trim().toLowerCase()).filter(s => s.length > 0);
+
+    const lastRow = historicalSheet.getLastRow();
+    if (lastRow <= 4) {
+      Logger.log('Historical sheet has no data to delete');
+      spreadsheet.toast('No historical data to delete', 'Delete Historical', 3);
+      return;
+    }
+
+    const dataValues = historicalSheet.getRange(5, 1, lastRow - 4, historicalSheet.getLastColumn()).getValues();
+    const rowsToKeep = [];
+
+    const matchesRange = (value, min, max) => {
+      if (min == null && max == null) {
+        return true;
+      }
+      if (value == null) {
+        return false;
+      }
+      if (min != null && value < min) {
+        return false;
+      }
+      if (max != null && value > max) {
+        return false;
+      }
+      return true;
+    };
+
+    dataValues.forEach((row, index) => {
+      let passesFilter = true;
+
+      const tracing = String(row[tracingCol - 1] || '').trim();
+      if (followFilter && followFilter.trim().toLowerCase() !== 'all') {
+        const traceLower = followFilter.trim().toLowerCase();
+        if (traceLower === 'follow' && tracing !== 'Follow') passesFilter = false;
+        else if ((traceLower === "don't follow" || traceLower === 'dont follow') && tracing !== "Don't follow") passesFilter = false;
+      }
+
+      const chain = String(row[chainCol - 1] || '').trim();
+      if (passesFilter && chainFilters.length > 0) {
+        const lower = chain.toLowerCase();
+        if (!chainFilters.some(filter => lower.includes(filter))) {
+          passesFilter = false;
+        }
+      }
+
+      const project = String(row[projectCol - 1] || '').trim();
+      if (passesFilter && projectFilters.length > 0) {
+        const lower = project.toLowerCase();
+        if (!projectFilters.some(filter => lower.includes(filter))) {
+          passesFilter = false;
+        }
+      }
+
+      const symbol = String(row[symbolCol - 1] || '').trim();
+      if (passesFilter && symbolFilters.length > 0) {
+        const lower = symbol.toLowerCase();
+        if (!symbolFilters.some(filter => lower.includes(filter))) {
+          passesFilter = false;
+        }
+      }
+
+      const tvlValue = parseFilterValue(row[tvlCol - 1]);
+      if (passesFilter && !matchesRange(tvlValue, tvlMin, tvlMax)) {
+        passesFilter = false;
+      }
+
+      const apyValue = parseFilterValue(row[apyCol - 1]);
+      if (passesFilter && !matchesRange(apyValue, apyMin, apyMax)) {
+        passesFilter = false;
+      }
+
+      const apyBaseValue = parseFilterValue(row[apyBaseCol - 1]);
+      if (passesFilter && !matchesRange(apyBaseValue, apyBaseMin, apyBaseMax)) {
+        passesFilter = false;
+      }
+
+      const apyRewardValue = parseFilterValue(row[apyRewardCol - 1]);
+      if (passesFilter && !matchesRange(apyRewardValue, apyRewardMin, apyRewardMax)) {
+        passesFilter = false;
+      }
+
+      const poolMetaValue = parseFilterValue(row[poolMetaCol - 1]);
+      if (passesFilter && !matchesRange(poolMetaValue, poolMetaMin, poolMetaMax)) {
+        passesFilter = false;
+      }
+
+      if (!passesFilter) {
+        rowsToKeep.push(row);
+      }
+    });
+
+    const totalRows = dataValues.length;
+    if (rowsToKeep.length === totalRows) {
+      Logger.log('No historical rows matched the delete filters');
+      spreadsheet.toast('No matching historical rows found', 'Delete Historical', 3);
+      return;
+    }
+
+    // Delete all historical data rows (rows 5 onwards) to collapse the table before re-inserting
+    while (historicalSheet.getLastRow() > 4) {
+      const currentLast = historicalSheet.getLastRow();
+      historicalSheet.deleteRows(5, currentLast - 4);
+    }
+
+    if (rowsToKeep.length > 0) {
+      historicalSheet.getRange(5, 1, rowsToKeep.length, rowsToKeep[0].length).setValues(rowsToKeep);
+    }
+
+    const deletedCount = totalRows - rowsToKeep.length;
+    Logger.log(`Deleted ${deletedCount} rows from Historical sheet`);
+    spreadsheet.toast(`Deleted ${deletedCount.toLocaleString()} historical rows`, 'Delete Historical', 5);
+  } catch (error) {
+    Logger.log('Error in deleteHistorical: ' + error);
+    spreadsheet.toast('Error: ' + error, 'Delete Historical - Error', 5);
+    SpreadsheetApp.getUi().alert('Error deleting historical rows: ' + error);
   }
 }
 
